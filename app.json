@@ -1,15 +1,20 @@
 {
   "expo": {
     "name": "GheeLedger",
-    "slug": "GheeLedger",
+    "slug": "gheeledger",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "y",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.vedicghee.ledger",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -20,6 +25,22 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "80672849-ffaf-4a57-b033-98276e868df8"
+      }
+    },
+    "owner": "student321s-organization",
+    "plugins": [
+      "expo-sqlite",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "GheeLedger needs microphone access for voice search.",
+          "speechRecognitionPermission": "GheeLedger needs speech recognition to search clients by voice."
+        }
+      ]
+    ]
   }
 }
