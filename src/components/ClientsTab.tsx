@@ -13,8 +13,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { Search, X, Users, ChevronRight, Mic, MicOff } from 'lucide-react-native';
-import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
+import { Search, X, Users, ChevronRight, SlidersHorizontal } from 'lucide-react-native';
 import { COLORS, FONTS } from '../theme';
 import { Customer } from '../types';
 import { AnimatedItem } from './AnimatedList';
@@ -32,6 +31,7 @@ interface ClientsTabProps {
     dueAccounts: number;
   };
   onOpenEditPhone: (customerId: string, customerName: string, currentPhone: string) => void;
+  onAddCustomerOpen: () => void;
 }
 
 export default function ClientsTab({
@@ -43,85 +43,9 @@ export default function ClientsTab({
   onSelectCustomer,
   metrics,
   onOpenEditPhone,
+  onAddCustomerOpen,
 }: ClientsTabProps) {
   const searchInputRef = useRef<TextInput>(null);
-  const [isListening, setIsListening] = useState(false);
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-
-  // Pulse animation for mic button when listening
-  const startPulse = useCallback(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.25,
-          duration: 600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
-  }, [pulseAnim]);
-
-  const stopPulse = useCallback(() => {
-    pulseAnim.stopAnimation();
-    pulseAnim.setValue(1);
-  }, [pulseAnim]);
-
-  // Speech recognition event handlers
-  useSpeechRecognitionEvent('result', (event) => {
-    const transcript = event.results[0]?.transcript;
-    if (transcript) {
-      setSearchQuery(transcript);
-    }
-  });
-
-  useSpeechRecognitionEvent('end', () => {
-    setIsListening(false);
-    stopPulse();
-  });
-
-  useSpeechRecognitionEvent('error', () => {
-    setIsListening(false);
-    stopPulse();
-  });
-
-  const toggleVoiceSearch = async () => {
-    if (isListening) {
-      ExpoSpeechRecognitionModule.stop();
-      setIsListening(false);
-      stopPulse();
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      return;
-    }
-
-    try {
-      const result = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-      if (!result.granted) {
-        return;
-      }
-
-      setSearchQuery('');
-      setIsListening(true);
-      startPulse();
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
-      ExpoSpeechRecognitionModule.start({
-        lang: 'hi-IN',
-        interimResults: true,
-        continuous: false,
-      });
-    } catch (error) {
-      console.error('Speech recognition error:', error);
-      setIsListening(false);
-      stopPulse();
-    }
-  };
 
   // Client search and filter logic (sorted by recent by default)
   const listFilteredCustomers = [...customers]
@@ -144,7 +68,6 @@ export default function ClientsTab({
       const matchText = c.name.toLowerCase().includes(searchQuery.toLowerCase()) || c.phone.includes(searchQuery);
       if (filterType === 'all') return matchText;
       if (filterType === 'due') return matchText && c.pendingAmount > 0;
-      // Bug #31: 'clear' should match zero balance AND credit (negative) balances
       if (filterType === 'clear') return matchText && c.pendingAmount <= 0;
       return matchText;
     });
@@ -163,6 +86,15 @@ export default function ClientsTab({
     setBottomOpacity(contentHeight <= containerHeight ? 0 : Math.min(Math.max(0, bottomDistance / 30), 1));
   };
 
+  // Helper to format phone number nicely (e.g. 98765 43210)
+  const formatPhoneNumber = (phone: string) => {
+    const digits = phone.replace(/[^0-9]/g, '');
+    if (digits.length === 10) {
+      return `${digits.slice(0, 5)} ${digits.slice(5)}`;
+    }
+    return phone;
+  };
+
   return (
     <View style={{ flex: 1, position: 'relative' }}>
       <ScrollView
@@ -171,163 +103,182 @@ export default function ClientsTab({
         onScroll={handleScroll}
         scrollEventThrottle={16}
       >
-      
-
-
-      {/* Floating Quick Stat Pills */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statBox}>
-          <Text style={styles.statLabel}>Total Outstanding</Text>
-          <Text style={styles.statValueDue}>₹{metrics.totalPending.toLocaleString('en-IN')}</Text>
-          <Text style={styles.statSubLabel}>Across {metrics.dueAccounts} buyers</Text>
-        </View>
-        <View style={styles.statBox}>
-          <Text style={styles.statLabel}>Ghee Supplied</Text>
-          <Text style={styles.statValue}> {metrics.volumeKg.toLocaleString('en-IN')} kg</Text>
-          <Text style={styles.statSubLabel}>Cumulative weight</Text>
-        </View>
-      </View>
-
-      {/* Search Input field */}
-      <View style={styles.searchSection}>
-        <View style={[
-          styles.searchContainer,
-          isListening && styles.searchContainerListening
-        ]}>
-          <Search size={16} color={isListening ? COLORS.coral : COLORS.textLightMuted} style={styles.searchIcon} />
-          <TextInput
-            ref={searchInputRef}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder={isListening ? "Listening..." : "Search client name or mobile..."}
-            placeholderTextColor={isListening ? COLORS.coral : COLORS.textLightMuted}
-            style={styles.searchInput}
-          />
-          {searchQuery !== '' ? (
-            <TouchableOpacity onPress={() => { setSearchQuery(''); if (isListening) { ExpoSpeechRecognitionModule.stop(); setIsListening(false); stopPulse(); } }} style={styles.clearIcon}>
-              <X size={16} color={COLORS.textLightMuted} />
-            </TouchableOpacity>
-          ) : (
-            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-              <TouchableOpacity 
-                onPress={toggleVoiceSearch}
-                style={[
-                  styles.micIcon,
-                  isListening && styles.micIconActive
-                ]}
-                activeOpacity={0.7}
-              >
-                {isListening ? (
-                  <MicOff size={16} color={COLORS.white} />
-                ) : (
-                  <Mic size={16} color={COLORS.coral} />
-                )}
-              </TouchableOpacity>
-            </Animated.View>
-          )}
-        </View>
-
-        {/* Filter Tab Row */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-          {[
-            { key: 'all', label: `All Clients (${customers.length})` },
-            { key: 'due', label: `Outstanding (${metrics.dueAccounts})` },
-            { key: 'clear', label: `Cleared (${customers.length - metrics.dueAccounts})` }
-          ].map((opt) => (
-            <TouchableOpacity
-              key={opt.key}
-              onPress={() => setFilterType(opt.key)}
-              style={[
-                styles.filterButton,
-                filterType === opt.key && styles.filterButtonActive
-              ]}
-              activeOpacity={0.8}
-            >
-              <Text style={[
-                styles.filterText,
-                filterType === opt.key && styles.filterTextActive
-              ]}>
-                {opt.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-
-
-      </View>
-
-      {/* Customer Directory Cards List */}
-      <View style={styles.listContainer}>
-
-        {listFilteredCustomers.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Users size={32} color={COLORS.textLightMuted} style={styles.emptyIcon} />
-            <Text style={styles.emptyText}>No clients match your selection.</Text>
+        
+        {/* Premium Stat Summary Cards */}
+        <View style={styles.statsContainer}>
+          {/* Card 1: Total Clients */}
+          <View style={styles.statCard}>
+            <View style={[styles.statIconBadge, { backgroundColor: COLORS.bgMintLight }]}>
+              <Users size={14} color={COLORS.coral} />
+            </View>
+            <Text style={styles.statCardLabel}>Total Clients</Text>
+            <Text style={styles.statCardValue}>{customers.length}</Text>
           </View>
-        ) : (
-          listFilteredCustomers.map((cust, index) => {
-            const isDue = cust.pendingAmount > 0;
-            const isCredit = cust.pendingAmount < 0;
-            const initials = cust.name
-              .split(' ')
-              .map(n => n[0])
-              .join('')
-              .toUpperCase()
-              .slice(0, 2);
 
-            return (
-              <AnimatedItem key={cust.id} index={index}>
+          {/* Card 2: Total Dues */}
+          <View style={styles.statCard}>
+            <View style={[styles.statIconBadge, { backgroundColor: COLORS.bgRedLight }]}>
+              <Text style={{ color: COLORS.red, fontSize: 12, fontWeight: 'bold' }}>↓</Text>
+            </View>
+            <Text style={styles.statCardLabel}>Total Dues</Text>
+            <Text style={styles.statCardValueDue}>₹{metrics.totalPending.toLocaleString('en-IN')}</Text>
+          </View>
+
+          {/* Card 3: Ghee Distributed */}
+          <View style={styles.statCard}>
+            <View style={[styles.statIconBadge, { backgroundColor: COLORS.accentGoldLight }]}>
+              <Text style={{ color: COLORS.accentGold, fontSize: 12, fontWeight: 'bold' }}>🍯</Text>
+            </View>
+            <Text style={styles.statCardLabel}>Ghee Distributed</Text>
+            <Text style={styles.statCardValueGhee}>{metrics.volumeKg.toLocaleString('en-IN')} kg</Text>
+          </View>
+        </View>
+
+        {/* Search & Filter Row */}
+        <View style={styles.searchSection}>
+          <View style={styles.searchRow}>
+            <View style={styles.searchContainer}>
+              <Search size={16} color={COLORS.textLightMuted} style={styles.searchIcon} />
+              <TextInput
+                ref={searchInputRef}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search clients by name or phone..."
+                placeholderTextColor={COLORS.textLightMuted}
+                style={styles.searchInput}
+              />
+              {searchQuery !== '' && (
+                <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearIcon}>
+                  <X size={16} color={COLORS.textLightMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+            <TouchableOpacity style={styles.filterMenuBtn} activeOpacity={0.7}>
+              <SlidersHorizontal size={16} color={COLORS.textDark} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Filter Pills row */}
+          <View style={styles.filterRow}>
+            {[
+              { key: 'all', label: 'All Clients' },
+              { key: 'due', label: 'Dues Pending' },
+              { key: 'clear', label: 'Cleared Accounts' }
+            ].map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                onPress={() => { setFilterType(opt.key); Haptics.selectionAsync(); }}
+                style={[
+                  styles.filterButton,
+                  filterType === opt.key && styles.filterButtonActive
+                ]}
+                activeOpacity={0.8}
+              >
+                <Text style={[
+                  styles.filterText,
+                  filterType === opt.key && styles.filterTextActive
+                ]}>
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Customer list */}
+        <View style={styles.listContainer}>
+          {listFilteredCustomers.length === 0 ? (
+            customers.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Users size={48} color={COLORS.textLightMuted} style={styles.emptyIcon} />
+                <Text style={styles.emptyTitleText}>No clients registered yet</Text>
+                <Text style={styles.emptySubtitleText}>Add your dairy clients to start recording sales, tracking dispatches and collecting pending dues.</Text>
                 <TouchableOpacity
-                  onPress={() => onSelectCustomer(cust.id)}
-                  style={styles.card}
-                  activeOpacity={0.7}
+                  onPress={onAddCustomerOpen}
+                  style={styles.emptyActionButton}
+                  activeOpacity={0.8}
                 >
-                  <View style={styles.cardLeft}>
-                    <View style={styles.avatar}>
-                      <Text style={styles.avatarText}>{initials}</Text>
-                    </View>
-                    <View>
-                      <Text style={styles.cardName}>{cust.name}</Text>
-                      {cust.phone && cust.phone !== '9999999999' && cust.phone.trim() !== '' ? (
-                        <Text style={styles.cardPhone}>{cust.phone}</Text>
-                      ) : (
-                        <TouchableOpacity
-                          onPress={() => onOpenEditPhone(cust.id, cust.name, '')}
-                          style={styles.addPhoneLink}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={styles.addPhoneLinkText}>+ Add Phone</Text>
-                        </TouchableOpacity>
-                      )}
-                      <View style={styles.badge}>
-                        <Text style={styles.badgeText}>Total Ghee: {cust.totalGheeKg} kg</Text>
+                  <Text style={styles.emptyActionButtonText}>Register First Client</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Search size={48} color={COLORS.textLightMuted} style={styles.emptyIcon} />
+                <Text style={styles.emptyTitleText}>No search results</Text>
+                <Text style={styles.emptySubtitleText}>No clients match your search query or selected filter pill.</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setSearchQuery('');
+                    setFilterType('all');
+                  }}
+                  style={styles.emptyActionButtonOutline}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.emptyActionButtonOutlineText}>Clear Search & Filter</Text>
+                </TouchableOpacity>
+              </View>
+            )
+          ) : (
+            listFilteredCustomers.map((cust, index) => {
+              const isDue = cust.pendingAmount > 0;
+              const isCredit = cust.pendingAmount < 0;
+              const initials = cust.name
+                .split(' ')
+                .map(n => n[0])
+                .join('')
+                .toUpperCase()
+                .slice(0, 2);
+
+              return (
+                <AnimatedItem key={cust.id} index={index}>
+                  <TouchableOpacity
+                    onPress={() => onSelectCustomer(cust.id)}
+                    style={styles.card}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.cardContent}>
+                      <View style={styles.cardLeft}>
+                        {/* Mint background, forest green initials avatar */}
+                        <View style={styles.avatar}>
+                          <Text style={styles.avatarText}>{initials}</Text>
+                        </View>
+                        <View style={styles.detailsColumn}>
+                          <Text style={styles.cardName}>{cust.name}</Text>
+                          {cust.phone && cust.phone !== '9999999999' && cust.phone.trim() !== '' ? (
+                            <Text style={styles.cardPhone}>{formatPhoneNumber(cust.phone)}</Text>
+                          ) : (
+                            <TouchableOpacity
+                              onPress={() => onOpenEditPhone(cust.id, cust.name, '')}
+                              style={styles.addPhoneLink}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.addPhoneLinkText}>+ Add Phone</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+
+                      {/* Right section: Ghee taken & dues/settled tag, trailed by chevron */}
+                      <View style={styles.cardRight}>
+                        <View style={styles.statusGroup}>
+                          <Text style={styles.cardGheeBold}>{cust.totalGheeKg} kg</Text>
+                          {isDue ? (
+                            <Text style={styles.pendingText}>₹{cust.pendingAmount.toLocaleString('en-IN')} pending</Text>
+                          ) : isCredit ? (
+                            <Text style={styles.creditText}>₹{Math.abs(cust.pendingAmount).toLocaleString('en-IN')} advance</Text>
+                          ) : (
+                            <Text style={styles.settledText}>Account Settled</Text>
+                          )}
+                        </View>
+                        <ChevronRight size={16} color={COLORS.textLightMuted} style={styles.chevron} />
                       </View>
                     </View>
-                  </View>
-
-                  <View style={styles.cardRight}>
-                    <View style={[
-                      styles.dueBadge,
-                      isDue ? styles.dueBadgeOutstanding : isCredit ? styles.dueBadgeCredit : styles.dueBadgeClear
-                    ]}>
-                      <Text style={[
-                        styles.dueBadgeText,
-                        isDue ? styles.dueBadgeTextOutstanding : isCredit ? styles.dueBadgeTextCredit : styles.dueBadgeTextClear
-                      ]}>
-                        {isDue ? `₹${cust.pendingAmount.toLocaleString('en-IN')}` : isCredit ? `₹${Math.abs(cust.pendingAmount).toLocaleString('en-IN')} Credit` : 'No Dues'}
-                      </Text>
-                    </View>
-                    <View style={styles.profileLink}>
-                      <Text style={styles.profileLinkText}>Profile</Text>
-                      <ChevronRight size={14} color={COLORS.coral} />
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              </AnimatedItem>
-            );
-          })
-        )}
-      </View>
+                  </TouchableOpacity>
+                </AnimatedItem>
+              );
+            })
+          )}
+        </View>
       </ScrollView>
       {topOpacity > 0 && (
         <LinearGradient
@@ -350,14 +301,14 @@ export default function ClientsTab({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingTop: 10,
+    paddingTop: 12,
   },
   topGradient: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: 35,
+    height: 30,
     zIndex: 10,
   },
   bottomGradient: {
@@ -365,75 +316,89 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: 35,
+    height: 30,
     zIndex: 10,
   },
   statsContainer: {
     flexDirection: 'row',
-    backgroundColor: COLORS.bgWarm,
-    borderRadius: 8,
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 18,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: COLORS.white,
     borderWidth: 1,
     borderColor: COLORS.border,
-    padding: 6,
-    marginBottom: 16,
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    alignItems: 'flex-start',
+    marginHorizontal: 3,
+    elevation: 1,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.02,
+    shadowRadius: 3,
   },
-  statBox: {
-    flex: 1,
-    backgroundColor: COLORS.bgSand,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(230, 223, 216, 0.5)',
-    paddingVertical: 10,
-    paddingHorizontal: 8,
+  statIconBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    marginHorizontal: 3,
+    marginBottom: 8,
   },
-  statLabel: {
+  statCardLabel: {
     fontFamily: FONTS.sans,
-    fontSize: 10,
+    fontSize: 9.5,
     color: COLORS.textMuted,
-    fontWeight: 'bold',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    fontWeight: '600',
+    marginBottom: 4,
   },
-  statValueDue: {
-    fontFamily: FONTS.serif,
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: COLORS.red,
-    marginTop: 2,
-  },
-  statValue: {
-    fontFamily: FONTS.serif,
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: COLORS.textDark,
-    marginTop: 2,
-  },
-  statSubLabel: {
+  statCardValue: {
     fontFamily: FONTS.sans,
-    fontSize: 9,
-    color: COLORS.textLightMuted,
-    marginTop: 2,
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.textDark,
+  },
+  statCardValueDue: {
+    fontFamily: FONTS.sans,
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.textDark,
+  },
+  statCardValueGhee: {
+    fontFamily: FONTS.sans,
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.textDark,
   },
   searchSection: {
-    marginBottom: 12,
+    marginBottom: 16,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.white,
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 22, // perfect pilled shape!
-    paddingHorizontal: 16,
+    borderRadius: 12,
+    paddingHorizontal: 12,
     height: 44,
+    flex: 1,
+    marginRight: 8,
     shadowColor: COLORS.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.02,
+    shadowRadius: 2,
+    elevation: 1,
   },
   searchIcon: {
     marginRight: 8,
@@ -441,46 +406,44 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontFamily: FONTS.sans,
-    fontSize: 14,
+    fontSize: 13,
     color: COLORS.textDark,
     paddingVertical: 8,
   },
   clearIcon: {
     padding: 4,
   },
-  micIcon: {
-    padding: 6,
-    borderRadius: 14,
-  },
-  micIconActive: {
-    backgroundColor: COLORS.coral,
-    padding: 6,
-    borderRadius: 14,
-  },
-  searchContainerListening: {
-    borderColor: COLORS.coral,
-    borderWidth: 2,
-    shadowColor: COLORS.coral,
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
+  filterMenuBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 1,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.02,
+    shadowRadius: 2,
   },
   filterRow: {
     flexDirection: 'row',
-    marginTop: 8,
-    paddingVertical: 4,
+    marginTop: 10,
+    width: '100%',
   },
   filterButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 15,
-    backgroundColor: COLORS.bgWarm,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: COLORS.white,
     borderWidth: 1,
-    borderColor: 'rgba(230, 223, 216, 0.5)',
+    borderColor: COLORS.border,
     marginRight: 6,
   },
   filterButtonActive: {
-    backgroundColor: COLORS.coral,
+    backgroundColor: COLORS.coral, // Forest Green
     borderColor: COLORS.coral,
   },
   filterText: {
@@ -496,59 +459,117 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   emptyContainer: {
-    paddingVertical: 40,
-    backgroundColor: 'rgba(239, 233, 222, 0.4)',
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: COLORS.border,
-    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: 48,
+    paddingHorizontal: 20,
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginTop: 10,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.02,
+    shadowRadius: 4,
+    elevation: 1,
   },
   emptyIcon: {
+    marginBottom: 16,
+    opacity: 0.8,
+  },
+  emptyTitleText: {
+    fontFamily: FONTS.serif,
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: COLORS.textDark,
+    textAlign: 'center',
     marginBottom: 8,
   },
-  emptyText: {
+  emptySubtitleText: {
     fontFamily: FONTS.sans,
     fontSize: 12,
     color: COLORS.textMuted,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 20,
+    paddingHorizontal: 10,
+  },
+  emptyActionButton: {
+    backgroundColor: COLORS.coral,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 24,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  emptyActionButtonText: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: COLORS.white,
+  },
+  emptyActionButtonOutline: {
+    borderWidth: 1,
+    borderColor: COLORS.coral,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 24,
+  },
+  emptyActionButtonOutlineText: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: COLORS.coral,
   },
   card: {
-    backgroundColor: COLORS.bgWarm,
+    backgroundColor: COLORS.white,
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 8,
-    padding: 14,
+    borderRadius: 16,
+    marginBottom: 8,
+    elevation: 1,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.02,
+    shadowRadius: 2,
+  },
+  cardContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
   },
   cardLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
+    flex: 1.2,
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: COLORS.bgSand,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: COLORS.bgMintLight, // soft mint background
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
   },
   avatarText: {
-    fontFamily: FONTS.serif,
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: COLORS.coral,
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.coral, // Forest Green initials
+  },
+  detailsColumn: {
+    flex: 1,
   },
   cardName: {
     fontFamily: FONTS.sans,
-    fontSize: 14,
+    fontSize: 13.5,
     fontWeight: '600',
     color: COLORS.textDark,
   },
@@ -558,69 +579,6 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     marginTop: 2,
   },
-  badge: {
-    alignSelf: 'flex-start',
-    backgroundColor: COLORS.bgSand,
-    borderWidth: 1,
-    borderColor: 'rgba(230, 223, 216, 0.5)',
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    marginTop: 4,
-  },
-  badgeText: {
-    fontFamily: FONTS.sans,
-    fontSize: 9,
-    fontWeight: '600',
-    color: COLORS.textLightMuted,
-  },
-  cardRight: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-  },
-  dueBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-    alignSelf: 'flex-end',
-  },
-  dueBadgeOutstanding: {
-    backgroundColor: 'rgba(198, 69, 69, 0.1)',
-  },
-  dueBadgeClear: {
-    backgroundColor: 'rgba(93, 184, 114, 0.1)',
-  },
-  dueBadgeText: {
-    fontFamily: FONTS.sans,
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
-  dueBadgeTextOutstanding: {
-    color: COLORS.red,
-  },
-  dueBadgeTextClear: {
-    color: COLORS.green,
-  },
-  dueBadgeCredit: {
-    backgroundColor: 'rgba(93, 184, 114, 0.15)',
-  },
-  dueBadgeTextCredit: {
-    color: COLORS.green,
-  },
-
-  profileLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 6,
-    alignSelf: 'flex-end',
-  },
-  profileLinkText: {
-    fontFamily: FONTS.sans,
-    fontSize: 10,
-    fontWeight: '600',
-    color: COLORS.coral,
-    marginRight: 2,
-  },
   addPhoneLink: {
     marginTop: 2,
   },
@@ -629,6 +587,45 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: COLORS.coral,
     fontWeight: 'bold',
-    textDecorationLine: 'underline',
+  },
+  cardRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flex: 1,
+  },
+  statusGroup: {
+    alignItems: 'flex-end',
+    marginRight: 10,
+  },
+  cardGheeBold: {
+    fontFamily: FONTS.sans,
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: COLORS.textDark,
+  },
+  pendingText: {
+    fontFamily: FONTS.sans,
+    fontSize: 10.5,
+    color: COLORS.red,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  creditText: {
+    fontFamily: FONTS.sans,
+    fontSize: 10.5,
+    color: COLORS.green,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  settledText: {
+    fontFamily: FONTS.sans,
+    fontSize: 10.5,
+    color: COLORS.green,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  chevron: {
+    marginLeft: 2,
   },
 });

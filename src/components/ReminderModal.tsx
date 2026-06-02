@@ -10,7 +10,7 @@ import {
   Platform
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { X, Sparkles, Copy, MessageSquare, Smartphone } from 'lucide-react-native';
+import { X, Sparkles, Copy, MessageSquare, Smartphone, Check } from 'lucide-react-native';
 import { COLORS, FONTS } from '../theme';
 import { Customer } from '../types';
 
@@ -139,7 +139,6 @@ export default function ReminderModal({
         }
       })
       .catch(() => {
-        // Bug #26: Fallback to clipboard if WhatsApp fails entirely
         Clipboard.setStringAsync(currentMessageText);
         triggerNotification('WhatsApp not available. Message copied to clipboard instead.', 'error');
       });
@@ -181,6 +180,23 @@ export default function ReminderModal({
           {/* Body */}
           <View style={styles.body}>
             
+            {/* Customer Details Card */}
+            <View style={styles.customerCard}>
+              <View style={styles.avatarCircle}>
+                <Text style={styles.avatarText}>
+                  {profile.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
+                </Text>
+              </View>
+              <View style={styles.customerInfo}>
+                <Text style={styles.customerName}>{profile.name}</Text>
+                <Text style={styles.customerPhone}>{profile.phone || 'No phone added'}</Text>
+              </View>
+              <View style={styles.duesContainer}>
+                <Text style={styles.duesLabel}>Outstanding</Text>
+                <Text style={styles.duesAmount}>₹{profile.pendingAmount.toLocaleString('en-IN')}</Text>
+              </View>
+            </View>
+
             {/* Language Selection Pills */}
             <View style={styles.languageContainer}>
               <Text style={styles.sectionLabel}>Select Language</Text>
@@ -211,46 +227,53 @@ export default function ReminderModal({
 
             {/* Template picker pills */}
             <View style={{ marginBottom: 16 }}>
-              <Text style={styles.sectionLabel}>Select Template Tone</Text>
+              <Text style={styles.sectionLabel}>Choose Reminder Type</Text>
               <View style={styles.templatePills}>
                 {[
-                  { key: 'gentle', label: 'Gentle' },
-                  { key: 'professional', label: 'Professional' },
-                  { key: 'urgent', label: 'Urgent' },
+                  { key: 'gentle', label: 'Polite Reminder' },
+                  { key: 'professional', label: 'Due Notice' },
+                  { key: 'urgent', label: 'Final Notice' },
                   { key: 'ai', label: 'AI Smart Draft' }
-                ].map(temp => (
-                  <TouchableOpacity
-                    key={temp.key}
-                    onPress={() => {
-                      setActiveTemplate(temp.key as any);
-                      if (temp.key === 'ai') {
-                        const langNames = { en: 'English', hi: 'Hindi' };
-                        generateAISmartDraft(langNames[selectedLanguage]);
-                      }
-                    }}
-                    style={[
-                      styles.pillButton,
-                      activeTemplate === temp.key && styles.pillButtonActive
-                    ]}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[
-                      styles.pillText,
-                      activeTemplate === temp.key && styles.pillTextActive
-                    ]}>
-                      {temp.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                ].map(temp => {
+                  const isActive = activeTemplate === temp.key;
+                  return (
+                    <TouchableOpacity
+                      key={temp.key}
+                      onPress={() => {
+                        setActiveTemplate(temp.key as any);
+                        if (temp.key === 'ai') {
+                          const langNames = { en: 'English', hi: 'Hindi' };
+                          generateAISmartDraft(langNames[selectedLanguage]);
+                        }
+                      }}
+                      style={[
+                        styles.pillButton,
+                        isActive && styles.pillButtonActive
+                      ]}
+                      activeOpacity={0.8}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        {isActive && temp.key !== 'ai' && <Check size={10} color={COLORS.white} style={{ marginRight: 3 }} />}
+                        {temp.key === 'ai' && <Sparkles size={10} color={isActive ? COLORS.white : COLORS.accentGold} style={{ marginRight: 3 }} />}
+                        <Text style={[
+                          styles.pillText,
+                          isActive && styles.pillTextActive
+                        ]}>
+                          {temp.label}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             </View>
 
             {/* Message Preview */}
             <View style={styles.previewBox}>
               <View style={styles.previewBoxHeader}>
-                {activeTemplate === 'ai' && <Sparkles size={12} color={COLORS.coral} style={{ marginRight: 4 }} />}
+                {activeTemplate === 'ai' && <Sparkles size={12} color={COLORS.accentGold} style={{ marginRight: 4 }} />}
                 <Text style={styles.previewBoxLabel}>
-                  {activeTemplate === 'ai' ? 'Gemini Generated Reminder' : 'Message Body Preview'}
+                  {activeTemplate === 'ai' ? 'Gemini Smart draft' : 'Message Body Preview'}
                 </Text>
               </View>
 
@@ -280,32 +303,30 @@ export default function ReminderModal({
             <View style={styles.buttonsRow}>
               <TouchableOpacity
                 onPress={handleCopyText}
-                style={styles.actionButton}
+                style={styles.actionButtonCopy}
                 activeOpacity={0.8}
               >
-                <Copy size={15} color={COLORS.bgSand} style={{ marginRight: 4 }} />
-                <Text style={styles.actionButtonText}>Copy</Text>
+                <Copy size={16} color={COLORS.textMuted} />
               </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={handleSendSMS}
-                style={[styles.actionButton, styles.actionButtonDark]}
+                style={styles.actionButtonSMSOutline}
                 activeOpacity={0.8}
               >
-                <Smartphone size={15} color={COLORS.bgSand} style={{ marginRight: 4 }} />
-                <Text style={styles.actionButtonText}>Direct SMS</Text>
+                <Smartphone size={15} color={COLORS.coral} style={{ marginRight: 6 }} />
+                <Text style={styles.actionButtonTextSMS}>Direct SMS</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={handleSendWhatsApp}
-                style={[styles.actionButton, styles.actionButtonCoral]}
+                style={styles.actionButtonWhatsApp}
                 activeOpacity={0.8}
               >
-                <MessageSquare size={15} color={COLORS.white} style={{ marginRight: 4 }} />
-                <Text style={[styles.actionButtonText, { color: COLORS.white }]}>WhatsApp</Text>
+                <MessageSquare size={15} color={COLORS.white} style={{ marginRight: 6 }} />
+                <Text style={styles.actionButtonTextWhatsApp}>WhatsApp</Text>
               </TouchableOpacity>
             </View>
-
 
           </View>
         </View>
@@ -362,6 +383,63 @@ const styles = StyleSheet.create({
   body: {
     padding: 20,
     paddingBottom: 30,
+  },
+  customerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  avatarCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.bgMintLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  avatarText: {
+    fontFamily: FONTS.sans,
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: COLORS.coral,
+  },
+  customerInfo: {
+    flex: 1,
+  },
+  customerName: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: COLORS.textDark,
+  },
+  customerPhone: {
+    fontFamily: FONTS.sans,
+    fontSize: 11,
+    color: COLORS.textMuted,
+    marginTop: 2,
+  },
+  duesContainer: {
+    alignItems: 'flex-end',
+  },
+  duesLabel: {
+    fontFamily: FONTS.sans,
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: COLORS.textLightMuted,
+    textTransform: 'uppercase',
+  },
+  duesAmount: {
+    fontFamily: FONTS.serif,
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: COLORS.red,
+    marginTop: 2,
   },
   languageContainer: {
     marginBottom: 16,
@@ -421,7 +499,6 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: 'bold',
     color: COLORS.textMuted,
-    textTransform: 'uppercase',
   },
   pillTextActive: {
     color: COLORS.white,
@@ -478,28 +555,48 @@ const styles = StyleSheet.create({
   buttonsRow: {
     flexDirection: 'row',
   },
-  actionButton: {
-    flex: 1,
+  actionButtonCopy: {
+    width: 44,
+    height: 44,
+    borderRadius: 6,
+    backgroundColor: COLORS.bgWarm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  actionButtonSMSOutline: {
+    flex: 1.2,
+    height: 44,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.bgDark,
+    backgroundColor: COLORS.transparent,
+    borderWidth: 1.5,
+    borderColor: COLORS.coral,
     borderRadius: 6,
-    paddingVertical: 12,
-    marginRight: 6,
+    marginRight: 8,
   },
-  actionButtonDark: {
-    backgroundColor: '#3d3d3a',
-    marginRight: 6,
+  actionButtonWhatsApp: {
+    flex: 2,
+    height: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1b8a5a', // Premium Forest Greenish WhatsApp Green
+    borderRadius: 6,
   },
-  actionButtonCoral: {
-    backgroundColor: COLORS.coral,
-    marginRight: 0,
-  },
-  actionButtonText: {
+  actionButtonTextSMS: {
     fontFamily: FONTS.sans,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 'bold',
-    color: COLORS.bgSand,
+    color: COLORS.coral,
+  },
+  actionButtonTextWhatsApp: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: COLORS.white,
   },
 });

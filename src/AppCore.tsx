@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { 
-  StyleSheet, 
-  View, 
-  Text, 
-  TouchableOpacity, 
+import {
+  StyleSheet,
+  View,
+  Text,
+  TouchableOpacity,
   StatusBar,
   ScrollView,
   Modal,
@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Users, TrendingUp, Plus, FileText, Settings, X, Mic } from 'lucide-react-native';
+import { Users, TrendingUp, Plus, FileText, Settings, X, Mic, User, Phone, Wallet, PlusCircle, UserPlus } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import * as SQLite from 'expo-sqlite';
@@ -35,6 +35,7 @@ import CustomerProfileSheet from './components/CustomerProfileSheet';
 import ReminderModal from './components/ReminderModal';
 import ReceiptVoucherModal from './components/ReceiptVoucherModal';
 import AuditLogsModal from './components/AuditLogsModal';
+import WelcomeScreen from './components/WelcomeScreen';
 
 // const apiKey = ""; // MOVED TO LOCAL STATE AND STORAGE IN APPCORE
 
@@ -52,7 +53,7 @@ function TabContainer({ activeTab, children }: TabContainerProps) {
   useEffect(() => {
     fadeAnim.setValue(0);
     slideAnim.setValue(8);
-    
+
     const frame = requestAnimationFrame(() => {
       Animated.parallel([
         Animated.timing(fadeAnim, {
@@ -87,13 +88,14 @@ function TabContainer({ activeTab, children }: TabContainerProps) {
 }
 
 export default function AppCore() {
-  const [activeTab, setActiveTab] = useState<'customers' | 'analytics' | 'quick-add' | 'vouchers' | 'settings'>('customers');
+  const [activeTab, setActiveTab] = useState<'customers' | 'analytics' | 'quick-add' | 'vouchers' | 'settings' | 'client-profile'>('customers');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error'>('success');
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dbRef = useRef<SQLite.SQLiteDatabase | null>(null);
   const dbQueueRef = useRef<Promise<any>>(Promise.resolve());
   const skipNextSaveRef = useRef({ customers: true, transactions: true, inventory: true, settings: true });
+  const [hasStarted, setHasStarted] = useState<boolean | null>(null); // null means still loading settings from DB
 
   const enqueueDbOp = useCallback((op: () => Promise<void>) => {
     dbQueueRef.current = dbQueueRef.current.then(async () => {
@@ -119,9 +121,9 @@ export default function AppCore() {
 
   // Preset shortcuts configurations
   const [weightPresets, setWeightPresets] = useState([0.5, 1, 2, 5]);
-  const [ratePresets, setRatePresets] = useState([1200, 1300, 1450]);
+  const [ratePresets, setRatePresets] = useState([750, 900, 1450]);
   const [weightPresetsInput, setWeightPresetsInput] = useState('0.5, 1, 2, 5');
-  const [ratePresetsInput, setRatePresetsInput] = useState('1200, 1300, 1450');
+  const [ratePresetsInput, setRatePresetsInput] = useState('750, 900, 1450');
 
   // Search, Filter & Drawer Triggers
   const [searchQuery, setSearchQuery] = useState('');
@@ -176,6 +178,10 @@ export default function AppCore() {
   // Inventory tracking
   const [inventory, setInventory] = useState<InventoryEntry[]>([]);
 
+  // Analytics Period filtering states
+  const [analyticsPeriod, setAnalyticsPeriod] = useState<'this_month' | 'last_month' | 'last_30_days' | 'all'>('this_month');
+  const [isAnalyticsPeriodModalOpen, setIsAnalyticsPeriodModalOpen] = useState(false);
+
   // Flag to prevent persistence overwriting database before loading is finished
   const [isLoaded, setIsLoaded] = useState(false);
 
@@ -185,23 +191,25 @@ export default function AppCore() {
       let loadedCustomers: Customer[] = [];
       let loadedTransactions: Transaction[] = [];
       let loadedInventory: InventoryEntry[] = [];
-      
+
       let db: SQLite.SQLiteDatabase;
-      
+
       try {
         // 1. Open/Create SQLite database
-        db = await SQLite.openDatabaseAsync('ghee_ledger.db');
+        db = await SQLite.openDatabaseAsync('ghee_ledger.db', { useNewConnection: true });
         dbRef.current = db;
 
         // 2. Initialize database schemas atomically
         await db.execAsync('PRAGMA foreign_keys = ON;');
-        
+
         await db.execAsync(`
           CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY NOT NULL,
             value TEXT NOT NULL
           );
-          
+        `);
+
+        await db.execAsync(`
           CREATE TABLE IF NOT EXISTS customers (
             id TEXT PRIMARY KEY NOT NULL,
             name TEXT NOT NULL,
@@ -211,7 +219,9 @@ export default function AppCore() {
             notes TEXT,
             createdAt INTEGER NOT NULL
           );
+        `);
 
+        await db.execAsync(`
           CREATE TABLE IF NOT EXISTS transactions (
             id TEXT PRIMARY KEY NOT NULL,
             customerId TEXT NOT NULL,
@@ -224,7 +234,9 @@ export default function AppCore() {
             date TEXT NOT NULL,
             notes TEXT
           );
+        `);
 
+        await db.execAsync(`
           CREATE TABLE IF NOT EXISTS inventory (
             id TEXT PRIMARY KEY NOT NULL,
             type TEXT NOT NULL,
@@ -244,7 +256,7 @@ export default function AppCore() {
           const savedCustomers = await AsyncStorage.getItem('ghee_customers');
           const savedTx = await AsyncStorage.getItem('ghee_transactions');
           const savedInventory = await AsyncStorage.getItem('ghee_inventory');
-          
+
           // Migrate Customers
           if (savedCustomers) {
             try {
@@ -304,8 +316,8 @@ export default function AppCore() {
 
           // Migrate all configurations and API keys
           const keysToMigrate = [
-            'ghee_biz_name', 'ghee_upi_id', 'ghee_def_rate', 'ghee_api_key', 
-            'ghee_gemini_model', 'ghee_sync_code', 'ghee_bucket_id', 
+            'ghee_biz_name', 'ghee_upi_id', 'ghee_def_rate', 'ghee_api_key',
+            'ghee_gemini_model', 'ghee_sync_code', 'ghee_bucket_id',
             'ghee_weight_presets', 'ghee_rate_presets'
           ];
           for (const key of keysToMigrate) {
@@ -404,6 +416,13 @@ export default function AppCore() {
           }
         }
 
+        const hasStartedRow = await db.getFirstAsync<{ value: string }>('SELECT value FROM settings WHERE key = ?', ['ghee_has_started']);
+        if (hasStartedRow) {
+          setHasStarted(hasStartedRow.value === 'true');
+        } else {
+          setHasStarted(false); // Default to false if not found
+        }
+
       } catch (err) {
         console.error("Fatal SQLite initialization/loading error:", err);
         Alert.alert("Database Error", "GheeLedger failed to open the secure local database engine.");
@@ -427,9 +446,9 @@ export default function AppCore() {
       }
       const db = dbRef.current;
       const currentCustomers = [...customers];
-      
+
       enqueueDbOp(async () => {
-        await db.withTransactionAsync(async () => {
+        try {
           await db.runAsync('DELETE FROM customers');
           for (const c of currentCustomers) {
             await db.runAsync(
@@ -437,7 +456,9 @@ export default function AppCore() {
               [c.id, c.name, c.phone || '', c.totalGheeKg || 0, c.pendingAmount || 0, c.notes || '', c.createdAt]
             );
           }
-        }).catch(e => console.error("Customers SQLite transaction failed:", e));
+        } catch (e) {
+          console.error("Customers SQLite transaction failed:", e);
+        }
       });
     }
   }, [customers, isLoaded, enqueueDbOp]);
@@ -450,9 +471,9 @@ export default function AppCore() {
       }
       const db = dbRef.current;
       const currentTx = [...transactions];
-      
+
       enqueueDbOp(async () => {
-        await db.withTransactionAsync(async () => {
+        try {
           await db.runAsync('DELETE FROM transactions');
           for (const t of currentTx) {
             await db.runAsync(
@@ -460,7 +481,9 @@ export default function AppCore() {
               [t.id, t.customerId, t.customerName, t.type, t.quantityKg || 0, t.ratePerKg || 0, t.totalAmount || 0, t.amountPaid || 0, t.date, t.notes || '']
             );
           }
-        }).catch(e => console.error("Transactions SQLite transaction failed:", e));
+        } catch (e) {
+          console.error("Transactions SQLite transaction failed:", e);
+        }
       });
     }
   }, [transactions, isLoaded, enqueueDbOp]);
@@ -473,9 +496,9 @@ export default function AppCore() {
       }
       const db = dbRef.current;
       const currentInv = [...inventory];
-      
+
       enqueueDbOp(async () => {
-        await db.withTransactionAsync(async () => {
+        try {
           await db.runAsync('DELETE FROM inventory');
           for (const i of currentInv) {
             await db.runAsync(
@@ -483,7 +506,9 @@ export default function AppCore() {
               [i.id, i.type, i.quantityKg || 0, i.notes || '', i.date, i.txId || '']
             );
           }
-        }).catch(e => console.error("Inventory SQLite transaction failed:", e));
+        } catch (e) {
+          console.error("Inventory SQLite transaction failed:", e);
+        }
       });
     }
   }, [inventory, isLoaded, enqueueDbOp]);
@@ -497,7 +522,7 @@ export default function AppCore() {
       }
       const db = dbRef.current;
       enqueueDbOp(async () => {
-        await db.withTransactionAsync(async () => {
+        try {
           await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_biz_name', businessName]);
           await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_upi_id', upiId]);
           await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_def_rate', defaultRate.toString()]);
@@ -507,10 +532,13 @@ export default function AppCore() {
           await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_bucket_id', bucketId]);
           await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_weight_presets', JSON.stringify(weightPresets)]);
           await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_rate_presets', JSON.stringify(ratePresets)]);
-        }).catch(e => console.error("Settings SQLite transaction failed:", e));
+          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_has_started', hasStarted ? 'true' : 'false']);
+        } catch (e) {
+          console.error("Settings SQLite transaction failed:", e);
+        }
       });
     }
-  }, [businessName, upiId, defaultRate, apiKey, geminiModel, syncCode, bucketId, weightPresets, ratePresets, isLoaded, enqueueDbOp]);
+  }, [businessName, upiId, defaultRate, apiKey, geminiModel, syncCode, bucketId, weightPresets, ratePresets, hasStarted, isLoaded, enqueueDbOp]);
 
   // Clean up toast timer on unmount (Bug #28)
   useEffect(() => {
@@ -546,12 +574,12 @@ export default function AppCore() {
     const totalSalesRevenue = transactions
       .filter(t => t.type === 'sale')
       .reduce((sum, t) => sum + t.totalAmount, 0);
-    
+
     const topBuyers = [...customers]
       .sort((a, b) => b.totalGheeKg - a.totalGheeKg)
       .slice(0, 3);
 
-    const collectionRate = totalSalesRevenue > 0 
+    const collectionRate = totalSalesRevenue > 0
       ? Math.min(100, Math.round((totalCashReceived / totalSalesRevenue) * 100))
       : 100;
 
@@ -591,6 +619,9 @@ export default function AppCore() {
     setDeleteConfirmationId(null);
     triggerNotification('Customer portfolio deleted.');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    if (activeTab === 'client-profile') {
+      setActiveTab('customers');
+    }
   };
 
   // Transaction delete: reverse the customer balance/volume effect
@@ -703,8 +734,8 @@ export default function AppCore() {
     // Bug #16: Check for duplicate name or phone
     const trimmedName = newCustomerForm.name.trim().toLowerCase();
     const duplicate = customers.find(
-      c => c.name.trim().toLowerCase() === trimmedName || 
-           (phoneDigits.length >= 10 && c.phone.replace(/[^0-9]/g, '') === phoneDigits)
+      c => c.name.trim().toLowerCase() === trimmedName ||
+        (phoneDigits.length >= 10 && c.phone.replace(/[^0-9]/g, '') === phoneDigits)
     );
     if (duplicate) {
       Alert.alert(
@@ -859,7 +890,7 @@ export default function AppCore() {
         .split(',')
         .map(w => parseFloat(w.trim()))
         .filter(w => !isNaN(w) && w > 0);
-      
+
       const parsedRates = ratePresetsInput
         .split(',')
         .map(r => parseInt(r.trim()))
@@ -913,6 +944,7 @@ export default function AppCore() {
     setRatePresets([1200, 1300, 1450]);
     setWeightPresetsInput('0.5, 1, 2, 5');
     setRatePresetsInput('1200, 1300, 1450');
+    setHasStarted(false);
     triggerNotification('Ledger database and all settings completely wiped.');
   };
 
@@ -1083,15 +1115,17 @@ export default function AppCore() {
             'This backup contains business settings (name, UPI, rate). Importing will overwrite your current settings. Continue?',
             [
               { text: 'Cancel', style: 'cancel' },
-              { text: 'Merge Data Only', onPress: () => {
-                // Merge only customer/transaction data, skip settings
-                const merged = mergeBackupData(customers, transactions, data.customers, data.transactions);
-                setCustomers(merged.customers);
-                setTransactions(merged.transactions);
-                AsyncStorage.setItem('ghee_customers', JSON.stringify(merged.customers));
-                AsyncStorage.setItem('ghee_transactions', JSON.stringify(merged.transactions));
-                triggerNotification('Data merged (settings kept unchanged).');
-              }},
+              {
+                text: 'Merge Data Only', onPress: () => {
+                  // Merge only customer/transaction data, skip settings
+                  const merged = mergeBackupData(customers, transactions, data.customers, data.transactions);
+                  setCustomers(merged.customers);
+                  setTransactions(merged.transactions);
+                  AsyncStorage.setItem('ghee_customers', JSON.stringify(merged.customers));
+                  AsyncStorage.setItem('ghee_transactions', JSON.stringify(merged.transactions));
+                  triggerNotification('Data merged (settings kept unchanged).');
+                }
+              },
               { text: 'Import All', onPress: doMerge }
             ]
           );
@@ -1189,7 +1223,7 @@ export default function AppCore() {
           setRatePresets(data.ratePresets);
           setRatePresetsInput(data.ratePresets.join(', '));
         }
-        
+
         await AsyncStorage.setItem('ghee_customers', JSON.stringify(merged.customers));
         await AsyncStorage.setItem('ghee_transactions', JSON.stringify(merged.transactions));
         if (data.businessName) await AsyncStorage.setItem('ghee_biz_name', data.businessName);
@@ -1232,8 +1266,8 @@ export default function AppCore() {
     let lastError: any = null;
 
     // Detect if payload features require v1beta (v1 stable does NOT support response_schema)
-    const requiresBeta = 
-      payload.system_instruction || 
+    const requiresBeta =
+      payload.system_instruction ||
       payload.systemInstruction ||
       (payload.generation_config && (payload.generation_config.response_schema || payload.generation_config.response_mime_type)) ||
       (payload.generationConfig && (payload.generationConfig.responseSchema || payload.generationConfig.responseMimeType));
@@ -1260,10 +1294,10 @@ export default function AppCore() {
           if (parsed.error && parsed.error.message) {
             errorMessage = parsed.error.message;
           }
-        } catch (_) {}
+        } catch (_) { }
 
         lastError = new Error(`Gemini API error (Status ${response.status}): ${errorMessage}`);
-        
+
         // If we got a 404 (Model not found) on v1, try falling back to v1beta for the next retry
         if (response.status === 404) {
           if (apiVersion === "v1" && !requiresBeta) {
@@ -1445,10 +1479,10 @@ export default function AppCore() {
       const parsedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (parsedText) {
         const result = JSON.parse(parsedText);
-        
+
         if (result.resultType === 'command' && result.command) {
           const { action, params } = result.command;
-          
+
           if (action === 'navigate') {
             if (params.tab) {
               setActiveTab(params.tab);
@@ -1462,7 +1496,7 @@ export default function AppCore() {
             }
             if (matchedCust) {
               setSelectedCustomerId(matchedCust.id);
-              setActiveTab('customers');
+              setActiveTab('client-profile');
               triggerNotification(`Opened ${matchedCust.name}'s profile`);
             } else {
               triggerNotification(`Could not find client "${params.customerName || ''}"`, 'error');
@@ -1651,7 +1685,7 @@ export default function AppCore() {
 
   const handleCommitParsedPreview = () => {
     if (!parsedPreviewList || parsedPreviewList.length === 0) return;
-    
+
     let currentCustomers = [...customers];
     const newTxs: Transaction[] = [];
     let lastTxId: string | null = null;
@@ -1722,7 +1756,7 @@ export default function AppCore() {
 
     setCustomers(currentCustomers);
     setTransactions(prev => [...newTxs, ...prev]);
-    
+
     if (lastTxId) {
       setReceiptTxId(lastTxId);
     }
@@ -1754,41 +1788,94 @@ export default function AppCore() {
     setSelectedCustomerId(null);
   };
 
+  if (!isLoaded || hasStarted === null) {
+    return (
+      <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={COLORS.coral} />
+      </SafeAreaView>
+    );
+  }
+
+  if (hasStarted === false) {
+    return (
+      <SafeAreaView style={{ flex: 1 }}>
+        <WelcomeScreen onGetStarted={() => {
+          setHasStarted(true);
+          if (dbRef.current) {
+            const db = dbRef.current;
+            enqueueDbOp(async () => {
+              await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_has_started', 'true']);
+            });
+          }
+        }} />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.bgSand} />
-      
-      {/* 1. Logo Header */}
-      <Header 
-        businessName={businessName}
-        customers={customers}
-        transactions={transactions}
-        upiId={upiId}
-        defaultRate={defaultRate}
-        weightPresets={weightPresets}
-        ratePresets={ratePresets}
-        onAddCustomerOpen={() => setIsAddCustomerOpen(true)}
-        triggerNotification={triggerNotification}
-      />
+
+      {/* 1. Premium Floating Header */}
+      {activeTab !== 'client-profile' && (
+        <Header
+          activeTab={activeTab as any}
+          businessName={businessName}
+          customers={customers}
+          onAddCustomerOpen={() => setIsAddCustomerOpen(true)}
+          onCalendarPress={() => setIsAnalyticsPeriodModalOpen(true)}
+          onBackPress={() => setActiveTab('customers')}
+          onHistoryPress={() => setActiveTab('vouchers')}
+        />
+      )}
 
       {/* 2. Main Tab Viewport */}
       <View style={styles.main}>
         <TabContainer activeTab={activeTab}>
           {activeTab === 'customers' && (
-            <ClientsTab 
+            <ClientsTab
               customers={customers}
               searchQuery={searchQuery}
               setSearchQuery={setSearchQuery}
               filterType={filterType}
               setFilterType={setFilterType}
-              onSelectCustomer={(id) => setSelectedCustomerId(id)}
+              onSelectCustomer={(id) => {
+                setSelectedCustomerId(id);
+                setActiveTab('client-profile');
+              }}
               metrics={metrics}
               onOpenEditPhone={handleOpenEditPhone}
+              onAddCustomerOpen={() => setIsAddCustomerOpen(true)}
+            />
+          )}
+
+          {activeTab === 'client-profile' && (
+            <CustomerProfileSheet
+              customerId={selectedCustomerId}
+              onClose={() => {
+                setSelectedCustomerId(null);
+                setActiveTab('customers');
+              }}
+              customers={customers}
+              transactions={transactions}
+              businessName={businessName}
+              onOpenReminderCenter={() => setIsReminderCenterOpen(true)}
+              onOpenQuickAdd={handleOpenQuickAdd}
+              onOpenReceipt={(txId) => setReceiptTxId(txId)}
+              deleteConfirmationId={deleteConfirmationId}
+              setDeleteConfirmationId={setDeleteConfirmationId}
+              deleteCustomer={(id) => {
+                deleteCustomer(id);
+                setActiveTab('customers');
+              }}
+              onOpenEditPhone={handleOpenEditPhone}
+              onEditTransaction={(tx) => setEditingTransaction(tx)}
+              onDeleteTransaction={deleteTransaction}
             />
           )}
 
           {activeTab === 'analytics' && (
-            <AnalyticsTab 
+            <AnalyticsTab
               businessName={businessName}
               defaultRate={defaultRate}
               metrics={metrics}
@@ -1797,11 +1884,18 @@ export default function AppCore() {
               inventory={inventory}
               onAddStock={addInventoryStock}
               triggerNotification={triggerNotification}
+              period={analyticsPeriod}
+              onPeriodChange={setAnalyticsPeriod}
+              isPeriodModalOpen={isAnalyticsPeriodModalOpen}
+              setIsPeriodModalOpen={setIsAnalyticsPeriodModalOpen}
+              onNavigateToRecordEntry={() => setActiveTab('quick-add')}
             />
           )}
 
           {activeTab === 'quick-add' && (
-            <QuickRecordTab 
+            <QuickRecordTab
+              businessName={businessName}
+              upiId={upiId}
               customers={customers}
               defaultRate={defaultRate}
               weightPresets={weightPresets}
@@ -1832,16 +1926,17 @@ export default function AppCore() {
           )}
 
           {activeTab === 'vouchers' && (
-            <ReceiptsTab 
+            <ReceiptsTab
               transactions={transactions}
               customers={customers}
               onSelectTransaction={(id) => setReceiptTxId(id)}
               triggerNotification={triggerNotification}
+              onNavigateToRecordEntry={() => setActiveTab('quick-add')}
             />
           )}
 
           {activeTab === 'settings' && (
-            <SettingsTab 
+            <SettingsTab
               businessName={businessName}
               setBusinessName={setBusinessName}
               upiId={upiId}
@@ -1880,93 +1975,80 @@ export default function AppCore() {
       )}
 
       {/* 4. Bottom Tab Bar (Google M3 Compact + Premium Floating Record Button) */}
-      <View style={styles.navBar}>
-        <TouchableOpacity 
-          onPress={() => { setActiveTab('customers'); Haptics.selectionAsync(); }}
-          style={styles.navItem}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.indicatorPill,
-            activeTab === 'customers' && styles.indicatorPillActive
-          ]}>
-            <Users size={20} color={activeTab === 'customers' ? COLORS.coral : COLORS.textLightMuted} />
-          </View>
-          <Text style={[styles.navText, activeTab === 'customers' && styles.navTextActive]}>Clients</Text>
-        </TouchableOpacity>
+      {activeTab !== 'client-profile' && (
+        <View style={styles.navBar}>
+          <TouchableOpacity
+            onPress={() => { setActiveTab('customers'); Haptics.selectionAsync(); }}
+            style={styles.navItem}
+            activeOpacity={0.7}
+          >
+            <View style={[
+              styles.indicatorPill,
+              activeTab === 'customers' && styles.indicatorPillActive
+            ]}>
+              <Users size={20} color={activeTab === 'customers' ? COLORS.coral : COLORS.textLightMuted} />
+            </View>
+            <Text style={[styles.navText, activeTab === 'customers' && styles.navTextActive]}>Clients</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity 
-          onPress={() => { setActiveTab('analytics'); Haptics.selectionAsync(); }}
-          style={styles.navItem}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.indicatorPill,
-            activeTab === 'analytics' && styles.indicatorPillActive
-          ]}>
-            <TrendingUp size={20} color={activeTab === 'analytics' ? COLORS.coral : COLORS.textLightMuted} />
-          </View>
-          <Text style={[styles.navText, activeTab === 'analytics' && styles.navTextActive]}>Analytics</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => { setActiveTab('analytics'); Haptics.selectionAsync(); }}
+            style={styles.navItem}
+            activeOpacity={0.7}
+          >
+            <View style={[
+              styles.indicatorPill,
+              activeTab === 'analytics' && styles.indicatorPillActive
+            ]}>
+              <TrendingUp size={20} color={activeTab === 'analytics' ? COLORS.coral : COLORS.textLightMuted} />
+            </View>
+            <Text style={[styles.navText, activeTab === 'analytics' && styles.navTextActive]}>Analytics</Text>
+          </TouchableOpacity>
 
-        {/* Restore Premium Floating Record button */}
-        <TouchableOpacity 
-          onPress={() => { setActiveTab('quick-add'); setRecordMethod('manual'); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}
-          style={styles.navItemRecord}
-          activeOpacity={0.8}
-        >
-          <View style={[styles.recordCircle, activeTab === 'quick-add' && styles.recordCircleActive]}>
-            <Plus size={24} color={COLORS.white} strokeWidth={3} />
-          </View>
-          <Text style={[styles.navText, activeTab === 'quick-add' && styles.navTextActive, { marginTop: 4 }]}>Record</Text>
-        </TouchableOpacity>
+          {/* Restore Premium Floating Record button */}
+          <TouchableOpacity
+            onPress={() => { setActiveTab('quick-add'); setRecordMethod('manual'); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}
+            style={styles.navItemRecord}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.recordCircle, activeTab === 'quick-add' && styles.recordCircleActive]}>
+              <Plus size={24} color={COLORS.white} strokeWidth={3} />
+            </View>
+            <Text style={[styles.navText, activeTab === 'quick-add' && styles.navTextActive, { marginTop: 4 }]}>Record</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity 
-          onPress={() => { setActiveTab('vouchers'); Haptics.selectionAsync(); }}
-          style={styles.navItem}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.indicatorPill,
-            activeTab === 'vouchers' && styles.indicatorPillActive
-          ]}>
-            <FileText size={20} color={activeTab === 'vouchers' ? COLORS.coral : COLORS.textLightMuted} />
-          </View>
-          <Text style={[styles.navText, activeTab === 'vouchers' && styles.navTextActive]}>Receipts</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => { setActiveTab('vouchers'); Haptics.selectionAsync(); }}
+            style={styles.navItem}
+            activeOpacity={0.7}
+          >
+            <View style={[
+              styles.indicatorPill,
+              activeTab === 'vouchers' && styles.indicatorPillActive
+            ]}>
+              <FileText size={20} color={activeTab === 'vouchers' ? COLORS.coral : COLORS.textLightMuted} />
+            </View>
+            <Text style={[styles.navText, activeTab === 'vouchers' && styles.navTextActive]}>Receipts</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity 
-          onPress={() => { setActiveTab('settings'); Haptics.selectionAsync(); }}
-          style={styles.navItem}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.indicatorPill,
-            activeTab === 'settings' && styles.indicatorPillActive
-          ]}>
-            <Settings size={20} color={activeTab === 'settings' ? COLORS.coral : COLORS.textLightMuted} />
-          </View>
-          <Text style={[styles.navText, activeTab === 'settings' && styles.navTextActive]}>Settings</Text>
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity
+            onPress={() => { setActiveTab('settings'); Haptics.selectionAsync(); }}
+            style={styles.navItem}
+            activeOpacity={0.7}
+          >
+            <View style={[
+              styles.indicatorPill,
+              activeTab === 'settings' && styles.indicatorPillActive
+            ]}>
+              <Settings size={20} color={activeTab === 'settings' ? COLORS.coral : COLORS.textLightMuted} />
+            </View>
+            <Text style={[styles.navText, activeTab === 'settings' && styles.navTextActive]}>Settings</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Modals & Bottom Sheets */}
-      <CustomerProfileSheet 
-        customerId={selectedCustomerId}
-        onClose={() => setSelectedCustomerId(null)}
-        customers={customers}
-        transactions={transactions}
-        businessName={businessName}
-        onOpenReminderCenter={() => setIsReminderCenterOpen(true)}
-        onOpenQuickAdd={handleOpenQuickAdd}
-        onOpenReceipt={(txId) => setReceiptTxId(txId)}
-        deleteConfirmationId={deleteConfirmationId}
-        setDeleteConfirmationId={setDeleteConfirmationId}
-        deleteCustomer={deleteCustomer}
-        onOpenEditPhone={handleOpenEditPhone}
-        onEditTransaction={(tx) => setEditingTransaction(tx)}
-        onDeleteTransaction={deleteTransaction}
-      />
+      {/* CustomerProfileSheet moved to dedicated client-profile tab */}
 
       {/* Edit Transaction Modal */}
       <Modal
@@ -2097,21 +2179,21 @@ export default function AppCore() {
         animationType="fade"
         onRequestClose={() => setEditingPhoneCustomerId(null)}
       >
-        <TouchableOpacity 
-          style={styles.phoneEditOverlay} 
-          activeOpacity={1} 
+        <TouchableOpacity
+          style={styles.phoneEditOverlay}
+          activeOpacity={1}
           onPress={() => setEditingPhoneCustomerId(null)}
         >
-          <TouchableOpacity 
-            style={styles.phoneEditCard} 
-            activeOpacity={1} 
+          <TouchableOpacity
+            style={styles.phoneEditCard}
+            activeOpacity={1}
             onPress={(e) => e.stopPropagation()}
           >
             <Text style={styles.phoneEditTitle}>Update Phone Number</Text>
             <Text style={styles.phoneEditSub}>
               Enter mobile number for client: <Text style={{ fontWeight: 'bold' }}>{editingPhoneName}</Text>
             </Text>
-            
+
             <TextInput
               keyboardType="phone-pad"
               value={editingPhoneValue}
@@ -2153,7 +2235,7 @@ export default function AppCore() {
         </TouchableOpacity>
       </Modal>
 
-      <ReminderModal 
+      <ReminderModal
         isOpen={isReminderCenterOpen}
         onClose={() => setIsReminderCenterOpen(false)}
         profile={customers.find(c => c.id === selectedCustomerId) || null}
@@ -2168,7 +2250,7 @@ export default function AppCore() {
         upiId={upiId}
       />
 
-      <ReceiptVoucherModal 
+      <ReceiptVoucherModal
         txId={receiptTxId}
         onClose={() => setReceiptTxId(null)}
         transactions={transactions}
@@ -2178,7 +2260,7 @@ export default function AppCore() {
         triggerNotification={triggerNotification}
       />
 
-      <AuditLogsModal 
+      <AuditLogsModal
         isOpen={isLogsSheetOpen}
         onClose={() => setIsLogsSheetOpen(false)}
         transactions={transactions}
@@ -2194,76 +2276,85 @@ export default function AppCore() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Register Client Account</Text>
-              <TouchableOpacity onPress={() => setIsAddCustomerOpen(false)} style={styles.modalCloseButton}>
-                <X size={20} color={COLORS.textDark} />
+              <TouchableOpacity onPress={() => setIsAddCustomerOpen(false)} style={{ padding: 4 }}>
+                <Text style={{ fontSize: 22, color: COLORS.textDark, fontWeight: 'bold' }}>←</Text>
               </TouchableOpacity>
+              <Text style={styles.modalTitle}>Add Client</Text>
+              <View style={styles.headerIconBadge}>
+                <UserPlus size={16} color={COLORS.coral} />
+              </View>
             </View>
+
+            <Text style={styles.modalSubtitle}>
+              Add a new customer to start tracking their ledger.
+            </Text>
 
             <ScrollView contentContainerStyle={styles.addFormBody} showsVerticalScrollIndicator={false}>
               <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Customer Name *</Text>
-                <TextInput
-                  value={newCustomerForm.name}
-                  onChangeText={(text) => setNewCustomerForm(prev => ({ ...prev, name: text }))}
-                  placeholder="e.g. Ramesh Chandra Iyer"
-                  placeholderTextColor={COLORS.textLightMuted}
-                  style={styles.addInput}
-                />
+                <Text style={styles.formLabel}>Full Name *</Text>
+                <View style={styles.inputWrapperRow}>
+                  <User size={16} color={COLORS.textLightMuted} style={styles.inputLeftIcon} />
+                  <TextInput
+                    value={newCustomerForm.name}
+                    onChangeText={(text) => setNewCustomerForm(prev => ({ ...prev, name: text }))}
+                    placeholder="e.g. Rajesh Kumar"
+                    placeholderTextColor={COLORS.textLightMuted}
+                    style={styles.addInputWithIcon}
+                  />
+                </View>
               </View>
 
               <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Mobile Phone (WhatsApp) *</Text>
-                <TextInput
-                  keyboardType="phone-pad"
-                  value={newCustomerForm.phone}
-                  onChangeText={(text) => setNewCustomerForm(prev => ({ ...prev, phone: text }))}
-                  placeholder="e.g. 9812345678"
-                  placeholderTextColor={COLORS.textLightMuted}
-                  style={styles.addInput}
-                />
-              </View>
-
-              <View style={styles.metaGrid}>
-                <View style={[styles.formGroup, { flex: 1, marginRight: 8 }]}>
-                  <Text style={styles.formLabel}>Initial Ghee (kg)</Text>
+                <Text style={styles.formLabel}>Phone Number *</Text>
+                <View style={styles.inputWrapperRow}>
+                  <Phone size={16} color={COLORS.textLightMuted} style={styles.inputLeftIcon} />
                   <TextInput
-                    keyboardType="numeric"
-                    value={newCustomerForm.initialKg}
-                    onChangeText={(text) => setNewCustomerForm(prev => ({ ...prev, initialKg: text }))}
-                    style={styles.addInput}
+                    keyboardType="phone-pad"
+                    value={newCustomerForm.phone}
+                    onChangeText={(text) => setNewCustomerForm(prev => ({ ...prev, phone: text }))}
+                    placeholder="e.g. 98765 43210"
+                    placeholderTextColor={COLORS.textLightMuted}
+                    style={styles.addInputWithIcon}
                   />
                 </View>
-                <View style={[styles.formGroup, { flex: 1 }]}>
-                  <Text style={styles.formLabel}>Initial Dues (₹)</Text>
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Opening Dues (₹) (Optional)</Text>
+                <View style={styles.inputWrapperRow}>
+                  <Wallet size={16} color={COLORS.textLightMuted} style={styles.inputLeftIcon} />
                   <TextInput
                     keyboardType="numeric"
                     value={newCustomerForm.initialDue}
-                    onChangeText={(text) => setNewCustomerForm(prev => ({ ...prev, initialDue: text }))}
-                    style={[styles.addInput, { color: COLORS.red }]}
+                    onChangeText={(text) => setNewCustomerForm(prev => ({ ...prev, initialDue: text, initialKg: String(parseFloat(text) ? prev.initialKg : 0) }))}
+                    placeholder="e.g. 0"
+                    placeholderTextColor={COLORS.textLightMuted}
+                    style={styles.addInputWithIcon}
                   />
                 </View>
+                <Text style={styles.helperText}>If they already owe you.</Text>
               </View>
 
               <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Delivery Instructions / Address</Text>
-                <TextInput
-                  multiline
-                  numberOfLines={2}
-                  value={newCustomerForm.notes}
-                  onChangeText={(text) => setNewCustomerForm(prev => ({ ...prev, notes: text }))}
-                  placeholder="Address, preferences..."
-                  placeholderTextColor={COLORS.textLightMuted}
-                  style={[styles.addInput, { height: 60, textAlignVertical: 'top' }]}
-                />
+                <Text style={styles.formLabel}>Notes (Optional)</Text>
+                <View style={styles.inputWrapperRow}>
+                  <FileText size={16} color={COLORS.textLightMuted} style={styles.inputLeftIcon} />
+                  <TextInput
+                    value={newCustomerForm.notes}
+                    onChangeText={(text) => setNewCustomerForm(prev => ({ ...prev, notes: text }))}
+                    placeholder="e.g. Trusted customer, regular buyer"
+                    placeholderTextColor={COLORS.textLightMuted}
+                    style={styles.addInputWithIcon}
+                  />
+                </View>
               </View>
 
               <TouchableOpacity
                 onPress={registerNewCustomer}
-                style={styles.saveCustButton}
+                style={[styles.saveCustButton, { backgroundColor: COLORS.coral, borderRadius: 24, height: 48, justifyContent: 'center' }]}
                 activeOpacity={0.8}
               >
-                <Text style={styles.saveCustButtonText}>Save Account Portfolio</Text>
+                <Text style={styles.saveCustButtonText}>Save Client</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -2356,7 +2447,7 @@ const styles = StyleSheet.create({
   },
   main: {
     flex: 1,
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
   },
   navBar: {
     height: 64, // Sleek, compact height restored!
@@ -2743,5 +2834,48 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
     color: COLORS.textDark,
+  },
+  inputWrapperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 48,
+  },
+  inputLeftIcon: {
+    marginRight: 10,
+  },
+  addInputWithIcon: {
+    flex: 1,
+    fontFamily: FONTS.sans,
+    fontSize: 13.5,
+    color: COLORS.textDark,
+    height: '100%',
+  },
+  helperText: {
+    fontFamily: FONTS.sans,
+    fontSize: 11,
+    color: COLORS.textLightMuted,
+    marginTop: 4,
+    marginLeft: 2,
+  },
+  modalSubtitle: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    color: COLORS.textMuted,
+    paddingHorizontal: 20,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  headerIconBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.bgMintLight,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

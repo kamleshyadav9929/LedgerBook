@@ -33,14 +33,7 @@
     },
     "owner": "student321s-organization",
     "plugins": [
-      "expo-sqlite",
-      [
-        "expo-speech-recognition",
-        {
-          "microphonePermission": "GheeLedger needs microphone access for voice search.",
-          "speechRecognitionPermission": "GheeLedger needs speech recognition to search clients by voice."
-        }
-      ]
+      "expo-sqlite"
     ]
   }
 }

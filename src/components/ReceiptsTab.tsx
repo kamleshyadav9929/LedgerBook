@@ -25,6 +25,7 @@ interface ReceiptsTabProps {
   customers: Customer[];
   onSelectTransaction: (id: string) => void;
   triggerNotification: (msg: string, type?: 'success' | 'error') => void;
+  onNavigateToRecordEntry?: () => void;
 }
 
 const localizations = {
@@ -111,8 +112,10 @@ export default function ReceiptsTab({
   customers,
   onSelectTransaction,
   triggerNotification,
+  onNavigateToRecordEntry,
 }: ReceiptsTabProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [listFilter, setListFilter] = useState<'all' | 'sales' | 'payments'>('all');
   const [showReceiptCenter, setShowReceiptCenter] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<'en' | 'hi'>('en');
 
@@ -239,14 +242,20 @@ export default function ReceiptsTab({
 
   // 1. General list filtration (for bottom scroll view)
   const filteredGeneralTxs = useMemo(() => {
-    return [...transactions]
+    let list = [...transactions];
+    if (listFilter === 'sales') {
+      list = list.filter(tx => tx.type === 'sale');
+    } else if (listFilter === 'payments') {
+      list = list.filter(tx => tx.type === 'payment');
+    }
+    return list
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .filter(tx => 
         tx.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         tx.date.includes(searchQuery) ||
         (tx.notes || '').toLowerCase().includes(searchQuery.toLowerCase())
       );
-  }, [transactions, searchQuery]);
+  }, [transactions, searchQuery, listFilter]);
 
   // 2. Receipt Center: Filter transactions for summary calculation
   const filteredTxsForSummary = useMemo(() => {
@@ -432,7 +441,7 @@ ${dict.footerText}`;
     .statement-title {
       font-family: Georgia, serif;
       font-size: 22px;
-      color: #cc785c;
+      color: #244d3d;
       margin: 0;
       text-align: right;
     }
@@ -493,10 +502,10 @@ ${dict.footerText}`;
       color: #141413;
     }
     .text-green {
-      color: #5db872;
+      color: #2e7d32;
     }
     .text-red {
-      color: #c64545;
+      color: #b93c3c;
     }
     .table-title {
       font-family: Georgia, serif;
@@ -539,12 +548,12 @@ ${dict.footerText}`;
       text-transform: uppercase;
     }
     .badge-dispatch {
-      background-color: rgba(204, 120, 92, 0.1);
-      color: #cc785c;
+      background-color: rgba(36, 77, 61, 0.1);
+      color: #244d3d;
     }
     .badge-payment {
-      background-color: rgba(93, 184, 114, 0.1);
-      color: #5db872;
+      background-color: rgba(46, 125, 50, 0.1);
+      color: #2e7d32;
     }
     .footer {
       border-top: 1px dashed #efe9de;
@@ -746,6 +755,36 @@ ${dict.footerText}`;
           <FileText size={20} color={showReceiptCenter ? COLORS.white : COLORS.coral} />
         </TouchableOpacity>
       </View>
+
+      {/* Segment filters row */}
+      {!isStatementGenerated && !showReceiptCenter && (
+        <View style={styles.segmentFiltersRow}>
+          {[
+            { key: 'all', label: 'All Receipts' },
+            { key: 'sales', label: 'Sales' },
+            { key: 'payments', label: 'Payments' },
+          ].map(pill => (
+            <TouchableOpacity
+              key={pill.key}
+              onPress={() => {
+                setListFilter(pill.key as any);
+              }}
+              style={[
+                styles.segmentPill,
+                listFilter === pill.key && styles.segmentPillActive
+              ]}
+              activeOpacity={0.8}
+            >
+              <Text style={[
+                styles.segmentPillText,
+                listFilter === pill.key && styles.segmentPillTextActive
+              ]}>
+                {pill.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
 
       {/* 2. RECEIPT CENTER PANEL (Collapsible) */}
       {showReceiptCenter && (
@@ -966,7 +1005,18 @@ ${dict.footerText}`;
           <Text style={styles.timelineHeader}>{dict.timelineHeader}</Text>
           <View style={styles.timelineBox}>
             {filteredTxsForSummary.length === 0 ? (
-              <Text style={styles.emptyTimelineText}>{dict.noTimelineRecords}</Text>
+              <View style={styles.timelineEmptyContainer}>
+                <FileText size={32} color={COLORS.textLightMuted} style={{ marginBottom: 8 }} />
+                <Text style={styles.timelineEmptyTitle}>{dict.noTimelineRecords}</Text>
+                <Text style={styles.timelineEmptySub}>No dispatches or collections are logged for this client during the selected statement date range.</Text>
+                <TouchableOpacity
+                  onPress={onNavigateToRecordEntry}
+                  style={styles.timelineEmptyButton}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.timelineEmptyButtonText}>Record First Entry</Text>
+                </TouchableOpacity>
+              </View>
             ) : (
               filteredTxsForSummary.map((tx, idx) => {
                 const isSale = tx.type === 'sale';
@@ -1036,35 +1086,126 @@ ${dict.footerText}`;
       {!isStatementGenerated && (
         <View style={styles.generalListSection}>
           {filteredGeneralTxs.length === 0 ? (
-            <Text style={styles.vEmptyText}>No matching transaction receipts found.</Text>
-          ) : (
-            filteredGeneralTxs.map((item, index) => (
-              <AnimatedItem key={item.id} index={index}>
+            transactions.length === 0 ? (
+              <View style={styles.receiptsEmptyContainer}>
+                <FileText size={48} color={COLORS.textLightMuted} style={{ marginBottom: 16 }} />
+                <Text style={styles.receiptsEmptyTitle}>No receipts logged yet</Text>
+                <Text style={styles.receiptsEmptySub}>Record Ghee sales dispatches or payment collections in your smart ledger to view and share customer receipts.</Text>
                 <TouchableOpacity
-                  onPress={() => onSelectTransaction(item.id)}
-                  style={styles.voucherListItem}
-                  activeOpacity={0.7}
+                  onPress={onNavigateToRecordEntry}
+                  style={styles.timelineEmptyButton}
+                  activeOpacity={0.8}
                 >
-                  <View>
-                    <Text style={styles.vName}>{item.customerName}</Text>
-                    <Text style={[styles.vDate, { color: item.type === 'sale' ? COLORS.textMuted : COLORS.green }]}>
-                      {item.date} • {item.type === 'sale' ? 'Dispatch' : 'Payment'}
-                    </Text>
-                  </View>
-                  <View style={styles.vRight}>
-                    <Text style={[styles.vAmt, { color: item.type === 'sale' ? COLORS.textDark : COLORS.green }]}>
-                      ₹{item.type === 'sale' ? item.totalAmount : item.amountPaid}
-                    </Text>
-                    <View style={styles.actionLink}>
-                      <Text style={styles.vAction}>Receipt</Text>
-                      <ChevronRight size={12} color={COLORS.coral} />
-                    </View>
-                  </View>
+                  <Text style={styles.timelineEmptyButtonText}>Record First Entry</Text>
                 </TouchableOpacity>
-              </AnimatedItem>
-            ))
+              </View>
+            ) : (
+              <View style={styles.receiptsEmptyContainer}>
+                <Search size={48} color={COLORS.textLightMuted} style={{ marginBottom: 16 }} />
+                <Text style={styles.receiptsEmptyTitle}>No matching receipts</Text>
+                <Text style={styles.receiptsEmptySub}>We couldn't find any transaction receipts matching your search query or segment filters.</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setSearchQuery('');
+                    setListFilter('all');
+                  }}
+                  style={styles.timelineEmptyButtonOutline}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.timelineEmptyButtonOutlineText}>Clear Search & Filters</Text>
+                </TouchableOpacity>
+              </View>
+            )
+          ) : (
+            filteredGeneralTxs.map((item, index) => {
+              const isSale = item.type === 'sale';
+              const isPaid = isSale ? (item.amountPaid >= item.totalAmount) : true;
+              const outstandingAmt = isSale ? (item.totalAmount - item.amountPaid) : 0;
+              
+              return (
+                <AnimatedItem key={item.id} index={index}>
+                  <TouchableOpacity
+                    onPress={() => onSelectTransaction(item.id)}
+                    style={styles.premiumReceiptCard}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.receiptCardHeader}>
+                      <View>
+                        <Text style={styles.receiptCustomerName}>{item.customerName}</Text>
+                        <Text style={styles.receiptDate}>{item.date}</Text>
+                      </View>
+                      <View style={[
+                        styles.statusPill,
+                        isPaid ? styles.statusPillPaid : styles.statusPillUnpaid
+                      ]}>
+                        <Text style={[
+                          styles.statusPillText,
+                          isPaid ? styles.statusPillTextPaid : styles.statusPillTextUnpaid
+                        ]}>
+                          {isPaid ? 'Paid' : `₹${outstandingAmt} Unpaid`}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.receiptCardBody}>
+                      <View style={styles.receiptMetrics}>
+                        {isSale ? (
+                          <View>
+                            <Text style={styles.receiptMetricLabel}>Quantity</Text>
+                            <Text style={styles.receiptMetricValue}>{item.quantityKg} kg</Text>
+                          </View>
+                        ) : (
+                          <View>
+                            <Text style={styles.receiptMetricLabel}>Method</Text>
+                            <Text style={styles.receiptMetricValue}>{item.notes || 'Cash / UPI'}</Text>
+                          </View>
+                        )}
+                        {isSale && (
+                          <View style={{ marginLeft: 24 }}>
+                            <Text style={styles.receiptMetricLabel}>Rate</Text>
+                            <Text style={styles.receiptMetricValue}>₹{item.ratePerKg}/kg</Text>
+                          </View>
+                        )}
+                      </View>
+                      
+                      <View style={styles.receiptAmountContainer}>
+                        <Text style={styles.receiptAmountLabel}>
+                          {isSale ? 'Total Bill' : 'Amount Received'}
+                        </Text>
+                        <Text style={[
+                          styles.receiptAmountValue,
+                          !isSale && { color: COLORS.green }
+                        ]}>
+                          ₹{isSale ? item.totalAmount : item.amountPaid}
+                        </Text>
+                      </View>
+                    </View>
+                    
+                    {item.notes && isSale ? (
+                      <View style={styles.receiptCardFooter}>
+                        <Text style={styles.receiptNotes} numberOfLines={1}>
+                          Note: {item.notes}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </TouchableOpacity>
+                </AnimatedItem>
+              );
+            })
           )}
         </View>
+      )}
+
+      {/* Broad Forest Green CTA at the bottom */}
+      {!isStatementGenerated && !showReceiptCenter && (
+        <TouchableOpacity
+          onPress={() => setShowReceiptCenter(true)}
+          style={styles.generateStatementCTA}
+          activeOpacity={0.8}
+        >
+          <FileText size={18} color={COLORS.white} style={{ marginRight: 8 }} />
+          <Text style={styles.generateStatementCTAText}>Generate Ledger Statement</Text>
+        </TouchableOpacity>
       )}
 
       {/* Custom Customer Picker Modal */}
@@ -1752,13 +1893,92 @@ const styles = StyleSheet.create({
   timelineBox: {
     paddingLeft: 4,
   },
-  emptyTimelineText: {
+  timelineEmptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 24,
+    paddingHorizontal: 16,
+    backgroundColor: COLORS.bgSand,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: COLORS.border,
+    marginTop: 6,
+  },
+  timelineEmptyTitle: {
+    fontFamily: FONTS.serif,
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: COLORS.textDark,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  timelineEmptySub: {
+    fontFamily: FONTS.sans,
+    fontSize: 11,
+    color: COLORS.textMuted,
+    textAlign: 'center',
+    lineHeight: 16,
+    marginBottom: 14,
+    paddingHorizontal: 8,
+  },
+  timelineEmptyButton: {
+    backgroundColor: COLORS.coral,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  timelineEmptyButtonText: {
+    fontFamily: FONTS.sans,
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: COLORS.white,
+  },
+  timelineEmptyButtonOutline: {
+    borderWidth: 1,
+    borderColor: COLORS.coral,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  timelineEmptyButtonOutlineText: {
+    fontFamily: FONTS.sans,
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: COLORS.coral,
+  },
+  receiptsEmptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 44,
+    paddingHorizontal: 20,
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginTop: 10,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.02,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  receiptsEmptyTitle: {
+    fontFamily: FONTS.serif,
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: COLORS.textDark,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  receiptsEmptySub: {
     fontFamily: FONTS.sans,
     fontSize: 12,
-    color: COLORS.textLightMuted,
-    fontStyle: 'italic',
-    paddingVertical: 14,
+    color: COLORS.textMuted,
     textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 20,
+    paddingHorizontal: 10,
   },
   timelineItem: {
     flexDirection: 'row',
@@ -2054,5 +2274,156 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.sans,
     fontSize: 12,
     fontWeight: 'bold',
+  },
+  segmentFiltersRow: {
+    flexDirection: 'row',
+    gap: 0,
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  segmentPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: 'transparent',
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+    marginBottom: -1,
+  },
+  segmentPillActive: {
+    borderBottomColor: COLORS.coral,
+  },
+  segmentPillText: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.textMuted,
+  },
+  segmentPillTextActive: {
+    color: COLORS.coral,
+  },
+  premiumReceiptCard: {
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    padding: 14,
+    marginBottom: 12,
+  },
+  receiptCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(230, 223, 216, 0.4)',
+    paddingBottom: 10,
+    marginBottom: 10,
+  },
+  receiptCustomerName: {
+    fontFamily: FONTS.sans,
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: COLORS.textDark,
+  },
+  receiptDate: {
+    fontFamily: FONTS.mono,
+    fontSize: 10,
+    color: COLORS.textLightMuted,
+    marginTop: 2,
+  },
+  statusPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  statusPillPaid: {
+    backgroundColor: COLORS.bgGreenLight,
+  },
+  statusPillUnpaid: {
+    backgroundColor: COLORS.bgRedLight,
+  },
+  statusPillText: {
+    fontFamily: FONTS.sans,
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  statusPillTextPaid: {
+    color: COLORS.green,
+  },
+  statusPillTextUnpaid: {
+    color: COLORS.red,
+  },
+  receiptCardBody: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  receiptMetrics: {
+    flexDirection: 'row',
+  },
+  receiptMetricLabel: {
+    fontFamily: FONTS.sans,
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: COLORS.textLightMuted,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  receiptMetricValue: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.textDark,
+  },
+  receiptAmountContainer: {
+    alignItems: 'flex-end',
+  },
+  receiptAmountLabel: {
+    fontFamily: FONTS.sans,
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: COLORS.textLightMuted,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  receiptAmountValue: {
+    fontFamily: FONTS.serif,
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: COLORS.textDark,
+  },
+  receiptCardFooter: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(230, 223, 216, 0.3)',
+    paddingTop: 6,
+    marginTop: 8,
+  },
+  receiptNotes: {
+    fontFamily: FONTS.sans,
+    fontSize: 10,
+    color: COLORS.textMuted,
+    fontStyle: 'italic',
+  },
+  generateStatementCTA: {
+    backgroundColor: COLORS.coral,
+    borderRadius: 8,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 16,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  generateStatementCTAText: {
+    fontFamily: FONTS.sans,
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: COLORS.white,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
 });
