@@ -87,6 +87,25 @@ function TabContainer({ activeTab, children }: TabContainerProps) {
   );
 }
 
+
+
+// ─── Module-level DB singleton ────────────────────────────────────────────────
+// Opened exactly once per app process. React StrictMode / fast-refresh mounts
+// the component twice but must never open two connections.
+let _dbSingleton: SQLite.SQLiteDatabase | null = null;
+let _dbOpenPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+
+async function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (_dbSingleton) return _dbSingleton;
+  if (_dbOpenPromise) return _dbOpenPromise;
+  _dbOpenPromise = SQLite.openDatabaseAsync('ghee_ledger.db').then(db => {
+    _dbSingleton = db;
+    return db;
+  });
+  return _dbOpenPromise;
+}
+
+
 export default function AppCore() {
   const [activeTab, setActiveTab] = useState<'customers' | 'analytics' | 'quick-add' | 'vouchers' | 'settings' | 'client-profile'>('customers');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -118,6 +137,8 @@ export default function AppCore() {
   const [syncCode, setSyncCode] = useState('');
   const [bucketId, setBucketId] = useState('YHrwq92PpeQAtgKYSUV1q7');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [activeSettingsSection, setActiveSettingsSection] = useState<'upi' | 'backup' | 'gemini' | 'security' | 'presets' | 'about' | 'import' | null>(null);
+  const [lastBackupTime, setLastBackupTime] = useState<string>('Never');
 
   // Preset shortcuts configurations
   const [weightPresets, setWeightPresets] = useState([0.5, 1, 2, 5]);
@@ -192,24 +213,21 @@ export default function AppCore() {
       let loadedTransactions: Transaction[] = [];
       let loadedInventory: InventoryEntry[] = [];
 
-      let db: SQLite.SQLiteDatabase;
-
       try {
-        // 1. Open/Create SQLite database
-        db = await SQLite.openDatabaseAsync('ghee_ledger.db', { useNewConnection: true });
+        // 1. Get/create singleton DB connection (safe against double-open)
+        const db = await getDb();
         dbRef.current = db;
 
-        // 2. Initialize database schemas atomically
-        await db.execAsync('PRAGMA foreign_keys = ON;');
-
+        // 2. Initialize all schemas in a single atomic execAsync call
         await db.execAsync(`
+          PRAGMA journal_mode=WAL;
+          PRAGMA foreign_keys = ON;
+
           CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY NOT NULL,
             value TEXT NOT NULL
           );
-        `);
 
-        await db.execAsync(`
           CREATE TABLE IF NOT EXISTS customers (
             id TEXT PRIMARY KEY NOT NULL,
             name TEXT NOT NULL,
@@ -219,9 +237,7 @@ export default function AppCore() {
             notes TEXT,
             createdAt INTEGER NOT NULL
           );
-        `);
 
-        await db.execAsync(`
           CREATE TABLE IF NOT EXISTS transactions (
             id TEXT PRIMARY KEY NOT NULL,
             customerId TEXT NOT NULL,
@@ -234,9 +250,7 @@ export default function AppCore() {
             date TEXT NOT NULL,
             notes TEXT
           );
-        `);
 
-        await db.execAsync(`
           CREATE TABLE IF NOT EXISTS inventory (
             id TEXT PRIMARY KEY NOT NULL,
             type TEXT NOT NULL,
@@ -362,6 +376,55 @@ export default function AppCore() {
           notes: row.notes
         }));
 
+        // Self-heal/reconstruct orphaned clients that have transactions but no client profile (e.g. Kamlesh)
+        const customerIds = new Set(loadedCustomers.map(c => c.id));
+        const missingCustomersMap = new Map<string, Customer>();
+
+        for (const tx of loadedTransactions) {
+          if (!customerIds.has(tx.customerId)) {
+            let reconstructedCust = missingCustomersMap.get(tx.customerId);
+            if (!reconstructedCust) {
+              reconstructedCust = {
+                id: tx.customerId,
+                name: tx.customerName || "Unknown Client",
+                phone: '',
+                totalGheeKg: 0,
+                pendingAmount: 0,
+                notes: 'Auto-reconstructed after database sync recovery',
+                createdAt: Date.now()
+              };
+            }
+
+            const isSale = tx.type === 'sale';
+            const balanceChange = isSale ? (tx.totalAmount - tx.amountPaid) : -tx.amountPaid;
+
+            reconstructedCust.totalGheeKg += isSale ? tx.quantityKg : 0;
+            reconstructedCust.pendingAmount += balanceChange;
+
+            missingCustomersMap.set(tx.customerId, reconstructedCust);
+          }
+        }
+
+        if (missingCustomersMap.size > 0) {
+          const reconstructed = Array.from(missingCustomersMap.values());
+          loadedCustomers = [...loadedCustomers, ...reconstructed];
+
+          // Persist reconstructed client profiles directly (we are already inside the db queue)
+          try {
+            await db.withTransactionAsync(async () => {
+              for (const c of reconstructed) {
+                await db.runAsync(
+                  'INSERT OR REPLACE INTO customers (id, name, phone, totalGheeKg, pendingAmount, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                  [c.id, c.name, c.phone, c.totalGheeKg, c.pendingAmount, c.notes, c.createdAt]
+                );
+              }
+            });
+            console.log("Reconstructed customer profiles saved to SQLite.");
+          } catch (dbErr) {
+            console.error("Failed to save reconstructed customers:", dbErr);
+          }
+        }
+
         const inventoryRows = await db.getAllAsync<any>('SELECT * FROM inventory ORDER BY date DESC, id DESC');
         loadedInventory = inventoryRows.map(row => ({
           id: row.id,
@@ -422,6 +485,13 @@ export default function AppCore() {
         } else {
           setHasStarted(false); // Default to false if not found
         }
+ 
+        const lastBackupRow = await db.getFirstAsync<{ value: string }>('SELECT value FROM settings WHERE key = ?', ['ghee_last_backup']);
+        if (lastBackupRow) {
+          setLastBackupTime(lastBackupRow.value);
+        } else {
+          setLastBackupTime('Never');
+        }
 
       } catch (err) {
         console.error("Fatal SQLite initialization/loading error:", err);
@@ -434,8 +504,10 @@ export default function AppCore() {
         setIsLoaded(true);
       }
     }
-    loadSavedData();
-  }, []);
+    enqueueDbOp(async () => {
+      await loadSavedData();
+    });
+  }, [enqueueDbOp]);
 
   // Save changes to SQLite (ACID transactional writes)
   useEffect(() => {
@@ -449,13 +521,15 @@ export default function AppCore() {
 
       enqueueDbOp(async () => {
         try {
-          await db.runAsync('DELETE FROM customers');
-          for (const c of currentCustomers) {
-            await db.runAsync(
-              'INSERT INTO customers (id, name, phone, totalGheeKg, pendingAmount, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
-              [c.id, c.name, c.phone || '', c.totalGheeKg || 0, c.pendingAmount || 0, c.notes || '', c.createdAt]
-            );
-          }
+          await db.withTransactionAsync(async () => {
+            await db.runAsync('DELETE FROM customers');
+            for (const c of currentCustomers) {
+              await db.runAsync(
+                'INSERT INTO customers (id, name, phone, totalGheeKg, pendingAmount, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [c.id, c.name, c.phone || '', c.totalGheeKg || 0, c.pendingAmount || 0, c.notes || '', c.createdAt]
+              );
+            }
+          });
         } catch (e) {
           console.error("Customers SQLite transaction failed:", e);
         }
@@ -474,13 +548,15 @@ export default function AppCore() {
 
       enqueueDbOp(async () => {
         try {
-          await db.runAsync('DELETE FROM transactions');
-          for (const t of currentTx) {
-            await db.runAsync(
-              'INSERT INTO transactions (id, customerId, customerName, type, quantityKg, ratePerKg, totalAmount, amountPaid, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-              [t.id, t.customerId, t.customerName, t.type, t.quantityKg || 0, t.ratePerKg || 0, t.totalAmount || 0, t.amountPaid || 0, t.date, t.notes || '']
-            );
-          }
+          await db.withTransactionAsync(async () => {
+            await db.runAsync('DELETE FROM transactions');
+            for (const t of currentTx) {
+              await db.runAsync(
+                'INSERT OR REPLACE INTO transactions (id, customerId, customerName, type, quantityKg, ratePerKg, totalAmount, amountPaid, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [t.id, t.customerId, t.customerName, t.type, t.quantityKg || 0, t.ratePerKg || 0, t.totalAmount || 0, t.amountPaid || 0, t.date, t.notes || '']
+              );
+            }
+          });
         } catch (e) {
           console.error("Transactions SQLite transaction failed:", e);
         }
@@ -499,13 +575,15 @@ export default function AppCore() {
 
       enqueueDbOp(async () => {
         try {
-          await db.runAsync('DELETE FROM inventory');
-          for (const i of currentInv) {
-            await db.runAsync(
-              'INSERT INTO inventory (id, type, quantityKg, notes, date, txId) VALUES (?, ?, ?, ?, ?, ?)',
-              [i.id, i.type, i.quantityKg || 0, i.notes || '', i.date, i.txId || '']
-            );
-          }
+          await db.withTransactionAsync(async () => {
+            await db.runAsync('DELETE FROM inventory');
+            for (const i of currentInv) {
+              await db.runAsync(
+                'INSERT OR REPLACE INTO inventory (id, type, quantityKg, notes, date, txId) VALUES (?, ?, ?, ?, ?, ?)',
+                [i.id, i.type, i.quantityKg || 0, i.notes || '', i.date, i.txId || '']
+              );
+            }
+          });
         } catch (e) {
           console.error("Inventory SQLite transaction failed:", e);
         }
@@ -523,22 +601,31 @@ export default function AppCore() {
       const db = dbRef.current;
       enqueueDbOp(async () => {
         try {
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_biz_name', businessName]);
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_upi_id', upiId]);
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_def_rate', defaultRate.toString()]);
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_api_key', apiKey]);
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_gemini_model', geminiModel]);
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_sync_code', syncCode]);
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_bucket_id', bucketId]);
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_weight_presets', JSON.stringify(weightPresets)]);
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_rate_presets', JSON.stringify(ratePresets)]);
-          await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_has_started', hasStarted ? 'true' : 'false']);
+          await db.withTransactionAsync(async () => {
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_biz_name', businessName]);
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_upi_id', upiId]);
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_def_rate', defaultRate.toString()]);
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_api_key', apiKey]);
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_gemini_model', geminiModel]);
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_sync_code', syncCode]);
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_bucket_id', bucketId]);
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_weight_presets', JSON.stringify(weightPresets)]);
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_rate_presets', JSON.stringify(ratePresets)]);
+            await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_has_started', hasStarted ? 'true' : 'false']);
+          });
         } catch (e) {
           console.error("Settings SQLite transaction failed:", e);
         }
       });
     }
   }, [businessName, upiId, defaultRate, apiKey, geminiModel, syncCode, bucketId, weightPresets, ratePresets, hasStarted, isLoaded, enqueueDbOp]);
+
+  // Reset active settings sub-section when switching tabs
+  useEffect(() => {
+    if (activeTab !== 'settings') {
+      setActiveSettingsSection(null);
+    }
+  }, [activeTab]);
 
   // Clean up toast timer on unmount (Bug #28)
   useEffect(() => {
@@ -585,6 +672,32 @@ export default function AppCore() {
 
     return { totalPending, volumeKg, dueAccounts, cashCollected: totalCashReceived, totalSalesRevenue, topBuyers, collectionRate };
   }, [customers, transactions]);
+ 
+  const backupRecords = useMemo(() => {
+    return customers.length + transactions.length + inventory.length;
+  }, [customers, transactions, inventory]);
+ 
+  const backupSizeFormatted = useMemo(() => {
+    try {
+      const payload = {
+        customers,
+        transactions,
+        inventory,
+        businessName,
+        upiId,
+        defaultRate,
+        weightPresets,
+        ratePresets,
+      };
+      const payloadStr = JSON.stringify(payload);
+      const bytes = payloadStr.length;
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    } catch (e) {
+      return '0 B';
+    }
+  }, [customers, transactions, inventory, businessName, upiId, defaultRate, weightPresets, ratePresets]);
 
   // Sync default rate on settings change safely
   useEffect(() => {
@@ -948,16 +1061,17 @@ export default function AppCore() {
     triggerNotification('Ledger database and all settings completely wiped.');
   };
 
-
-
   const mergeBackupData = (
     localCusts: Customer[],
     localTxs: Transaction[],
+    localInv: InventoryEntry[],
     incomingCusts: Customer[],
-    incomingTxs: Transaction[]
+    incomingTxs: Transaction[],
+    incomingInv: InventoryEntry[]
   ) => {
     const safeIncomingCusts = incomingCusts || [];
     const safeIncomingTxs = incomingTxs || [];
+    const safeIncomingInv = incomingInv || [];
 
     const mergedCustomersMap = new Map<string, Customer>();
 
@@ -987,6 +1101,16 @@ export default function AppCore() {
     }
 
     const mergedTransactionsList = Array.from(mergedTransactionsMap.values());
+
+    // 3. Union inventory by ID
+    const mergedInventoryMap = new Map<string, InventoryEntry>();
+    for (const inv of safeIncomingInv) {
+      mergedInventoryMap.set(inv.id, { ...inv });
+    }
+    for (const inv of localInv) {
+      mergedInventoryMap.set(inv.id, { ...inv });
+    }
+    const mergedInventoryList = Array.from(mergedInventoryMap.values());
 
     // Helper to get chronological timestamp
     const getTxTimestamp = (tx: Transaction): number => {
@@ -1021,24 +1145,36 @@ export default function AppCore() {
 
     // Recalculate balances by iterating through chronologically sorted transactions
     for (const tx of mergedTransactionsList) {
-      const cust = mergedCustomersMap.get(tx.customerId);
-      if (cust) {
-        customerHasTransactions.add(tx.customerId);
-        const isSale = tx.type === 'sale';
-        const qty = tx.quantityKg;
-        const paid = tx.amountPaid;
-        const bill = tx.totalAmount;
-        const balanceChange = isSale ? (bill - paid) : -paid;
-
-        const newTotalGhee = cust.totalGheeKg + qty;
-        const newPendingAmount = cust.pendingAmount + balanceChange;
-
-        mergedCustomersMap.set(tx.customerId, {
-          ...cust,
-          totalGheeKg: newTotalGhee,
-          pendingAmount: newPendingAmount,
-        });
+      let cust = mergedCustomersMap.get(tx.customerId);
+      if (!cust) {
+        // Reconstruct missing customer profile
+        cust = {
+          id: tx.customerId,
+          name: tx.customerName || "Unknown Client",
+          phone: '',
+          totalGheeKg: 0,
+          pendingAmount: 0,
+          notes: 'Auto-reconstructed after database sync recovery',
+          createdAt: Date.now()
+        };
+        mergedCustomersMap.set(tx.customerId, cust);
       }
+
+      customerHasTransactions.add(tx.customerId);
+      const isSale = tx.type === 'sale';
+      const qty = tx.quantityKg;
+      const paid = tx.amountPaid;
+      const bill = tx.totalAmount;
+      const balanceChange = isSale ? (bill - paid) : -paid;
+
+      const newTotalGhee = cust.totalGheeKg + qty;
+      const newPendingAmount = cust.pendingAmount + balanceChange;
+
+      mergedCustomersMap.set(tx.customerId, {
+        ...cust,
+        totalGheeKg: newTotalGhee,
+        pendingAmount: newPendingAmount,
+      });
     }
 
     // For any customers that had NO transactions, restore their original values
@@ -1058,10 +1194,12 @@ export default function AppCore() {
     // Sort transactions in reverse chronological order (newest first)
     const finalTransactionsList = [...mergedTransactionsList].sort((a, b) => getTxTimestamp(b) - getTxTimestamp(a));
     const finalCustomersList = Array.from(mergedCustomersMap.values());
+    const finalInventoryList = [...mergedInventoryList].sort((a, b) => b.date.localeCompare(a.date));
 
     return {
       customers: finalCustomersList,
       transactions: finalTransactionsList,
+      inventory: finalInventoryList,
     };
   };
 
@@ -1080,12 +1218,18 @@ export default function AppCore() {
           const merged = mergeBackupData(
             customers,
             transactions,
+            inventory,
             data.customers,
-            data.transactions
+            data.transactions,
+            data.inventory
           );
+
+          // Prevent useEffect hooks from double-saving/conflicting
+          skipNextSaveRef.current = { customers: true, transactions: true, inventory: true, settings: true };
 
           setCustomers(merged.customers);
           setTransactions(merged.transactions);
+          setInventory(merged.inventory);
           if (data.businessName) setBusinessName(data.businessName);
           if (data.upiId) setUpiId(data.upiId);
           if (data.defaultRate) setDefaultRate(data.defaultRate);
@@ -1098,13 +1242,51 @@ export default function AppCore() {
             setRatePresetsInput(data.ratePresets.join(', '));
           }
 
-          AsyncStorage.setItem('ghee_customers', JSON.stringify(merged.customers));
-          AsyncStorage.setItem('ghee_transactions', JSON.stringify(merged.transactions));
-          if (data.businessName) AsyncStorage.setItem('ghee_biz_name', data.businessName);
-          if (data.upiId) AsyncStorage.setItem('ghee_upi_id', data.upiId);
-          AsyncStorage.setItem('ghee_def_rate', (data.defaultRate || defaultRate).toString());
-          if (data.weightPresets) AsyncStorage.setItem('ghee_weight_presets', JSON.stringify(data.weightPresets));
-          if (data.ratePresets) AsyncStorage.setItem('ghee_rate_presets', JSON.stringify(data.ratePresets));
+          // Save to SQLite
+          if (dbRef.current) {
+            const db = dbRef.current;
+            enqueueDbOp(async () => {
+              try {
+                await db.withTransactionAsync(async () => {
+                  // 1. Wipe and rewrite customers
+                  await db.runAsync('DELETE FROM customers');
+                  for (const c of merged.customers) {
+                    await db.runAsync(
+                      'INSERT OR REPLACE INTO customers (id, name, phone, totalGheeKg, pendingAmount, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                      [c.id, c.name, c.phone || '', c.totalGheeKg || 0, c.pendingAmount || 0, c.notes || '', c.createdAt || Date.now()]
+                    );
+                  }
+
+                  // 2. Wipe and rewrite transactions
+                  await db.runAsync('DELETE FROM transactions');
+                  for (const t of merged.transactions) {
+                    await db.runAsync(
+                      'INSERT OR REPLACE INTO transactions (id, customerId, customerName, type, quantityKg, ratePerKg, totalAmount, amountPaid, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                      [t.id, t.customerId, t.customerName, t.type, t.quantityKg || 0, t.ratePerKg || 0, t.totalAmount || 0, t.amountPaid || 0, t.date, t.notes || '']
+                    );
+                  }
+
+                  // 3. Wipe and rewrite inventory
+                  await db.runAsync('DELETE FROM inventory');
+                  for (const i of merged.inventory) {
+                    await db.runAsync(
+                      'INSERT OR REPLACE INTO inventory (id, type, quantityKg, notes, date, txId) VALUES (?, ?, ?, ?, ?, ?)',
+                      [i.id, i.type, i.quantityKg || 0, i.notes || '', i.date, i.txId || '']
+                    );
+                  }
+
+                  // 4. Save settings to SQLite
+                  if (data.businessName) await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_biz_name', data.businessName]);
+                  if (data.upiId) await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_upi_id', data.upiId]);
+                  await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_def_rate', (data.defaultRate || defaultRate).toString()]);
+                  if (data.weightPresets) await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_weight_presets', JSON.stringify(data.weightPresets)]);
+                  if (data.ratePresets) await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_rate_presets', JSON.stringify(data.ratePresets)]);
+                });
+              } catch (dbErr) {
+                console.error("SQLite write failed during JSON import:", dbErr);
+              }
+            });
+          }
 
           triggerNotification('Backup payload merged successfully!');
         };
@@ -1118,11 +1300,48 @@ export default function AppCore() {
               {
                 text: 'Merge Data Only', onPress: () => {
                   // Merge only customer/transaction data, skip settings
-                  const merged = mergeBackupData(customers, transactions, data.customers, data.transactions);
+                  const merged = mergeBackupData(customers, transactions, inventory, data.customers, data.transactions, data.inventory);
+                  
+                  // Prevent useEffect hooks from double-saving/conflicting
+                  skipNextSaveRef.current = { customers: true, transactions: true, inventory: true, settings: true };
+                  
                   setCustomers(merged.customers);
                   setTransactions(merged.transactions);
-                  AsyncStorage.setItem('ghee_customers', JSON.stringify(merged.customers));
-                  AsyncStorage.setItem('ghee_transactions', JSON.stringify(merged.transactions));
+                  setInventory(merged.inventory);
+
+                  // Save to SQLite
+                  if (dbRef.current) {
+                    const db = dbRef.current;
+                    enqueueDbOp(async () => {
+                      try {
+                        await db.withTransactionAsync(async () => {
+                          await db.runAsync('DELETE FROM customers');
+                          for (const c of merged.customers) {
+                            await db.runAsync(
+                              'INSERT OR REPLACE INTO customers (id, name, phone, totalGheeKg, pendingAmount, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                              [c.id, c.name, c.phone || '', c.totalGheeKg || 0, c.pendingAmount || 0, c.notes || '', c.createdAt || Date.now()]
+                            );
+                          }
+                          await db.runAsync('DELETE FROM transactions');
+                          for (const t of merged.transactions) {
+                            await db.runAsync(
+                              'INSERT OR REPLACE INTO transactions (id, customerId, customerName, type, quantityKg, ratePerKg, totalAmount, amountPaid, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                              [t.id, t.customerId, t.customerName, t.type, t.quantityKg || 0, t.ratePerKg || 0, t.totalAmount || 0, t.amountPaid || 0, t.date, t.notes || '']
+                            );
+                          }
+                          await db.runAsync('DELETE FROM inventory');
+                          for (const i of merged.inventory) {
+                            await db.runAsync(
+                              'INSERT OR REPLACE INTO inventory (id, type, quantityKg, notes, date, txId) VALUES (?, ?, ?, ?, ?, ?)',
+                              [i.id, i.type, i.quantityKg || 0, i.notes || '', i.date, i.txId || '']
+                            );
+                          }
+                        });
+                      } catch (dbErr) {
+                        console.error("SQLite write failed during JSON data-only import:", dbErr);
+                      }
+                    });
+                  }
                   triggerNotification('Data merged (settings kept unchanged).');
                 }
               },
@@ -1144,6 +1363,7 @@ export default function AppCore() {
     return {
       customers,
       transactions,
+      inventory,
       businessName,
       upiId,
       defaultRate,
@@ -1169,9 +1389,31 @@ export default function AppCore() {
         body: JSON.stringify(payload),
       });
       if (response.ok) {
-        await AsyncStorage.setItem('ghee_sync_code', trimmedCode);
-        await AsyncStorage.setItem('ghee_bucket_id', bucketId);
+        // Create formatted timestamp
+        const nowStr = new Date().toLocaleString('en-IN', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        }).replace(/,/g, ' •'); // Formats like "15 May 2024 • 10:30 AM"
+
         setSyncCode(trimmedCode);
+        setLastBackupTime(nowStr);
+
+        if (dbRef.current) {
+          const db = dbRef.current;
+          enqueueDbOp(async () => {
+            try {
+              await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_sync_code', trimmedCode]);
+              await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_bucket_id', bucketId]);
+              await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_last_backup', nowStr]);
+            } catch (err) {
+              console.error("Failed to write sync settings after backup:", err);
+            }
+          });
+        }
         triggerNotification('Database successfully backed up to cloud!');
       } else {
         triggerNotification('Cloud backup failed: ' + response.statusText, 'error');
@@ -1206,12 +1448,18 @@ export default function AppCore() {
         const merged = mergeBackupData(
           customers,
           transactions,
+          inventory,
           data.customers,
-          data.transactions
+          data.transactions,
+          data.inventory
         );
+
+        // Prevent useEffect hooks from double-saving/conflicting
+        skipNextSaveRef.current = { customers: true, transactions: true, inventory: true, settings: true };
 
         setCustomers(merged.customers);
         setTransactions(merged.transactions);
+        setInventory(merged.inventory);
         if (data.businessName) setBusinessName(data.businessName);
         if (data.upiId) setUpiId(data.upiId);
         if (data.defaultRate) setDefaultRate(data.defaultRate);
@@ -1223,17 +1471,57 @@ export default function AppCore() {
           setRatePresets(data.ratePresets);
           setRatePresetsInput(data.ratePresets.join(', '));
         }
-
-        await AsyncStorage.setItem('ghee_customers', JSON.stringify(merged.customers));
-        await AsyncStorage.setItem('ghee_transactions', JSON.stringify(merged.transactions));
-        if (data.businessName) await AsyncStorage.setItem('ghee_biz_name', data.businessName);
-        if (data.upiId) await AsyncStorage.setItem('ghee_upi_id', data.upiId);
-        await AsyncStorage.setItem('ghee_def_rate', (data.defaultRate || defaultRate).toString());
-        if (data.weightPresets) await AsyncStorage.setItem('ghee_weight_presets', JSON.stringify(data.weightPresets));
-        if (data.ratePresets) await AsyncStorage.setItem('ghee_rate_presets', JSON.stringify(data.ratePresets));
-        await AsyncStorage.setItem('ghee_sync_code', trimmedCode);
-        await AsyncStorage.setItem('ghee_bucket_id', bucketId);
         setSyncCode(trimmedCode);
+
+        // Save to SQLite
+        if (dbRef.current) {
+          const db = dbRef.current;
+          enqueueDbOp(async () => {
+            try {
+              await db.withTransactionAsync(async () => {
+                // 1. Wipe and rewrite customers
+                await db.runAsync('DELETE FROM customers');
+                for (const c of merged.customers) {
+                  await db.runAsync(
+                    'INSERT OR REPLACE INTO customers (id, name, phone, totalGheeKg, pendingAmount, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    [c.id, c.name, c.phone || '', c.totalGheeKg || 0, c.pendingAmount || 0, c.notes || '', c.createdAt || Date.now()]
+                  );
+                }
+
+                // 2. Wipe and rewrite transactions
+                await db.runAsync('DELETE FROM transactions');
+                for (const t of merged.transactions) {
+                  await db.runAsync(
+                    'INSERT OR REPLACE INTO transactions (id, customerId, customerName, type, quantityKg, ratePerKg, totalAmount, amountPaid, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [t.id, t.customerId, t.customerName, t.type, t.quantityKg || 0, t.ratePerKg || 0, t.totalAmount || 0, t.amountPaid || 0, t.date, t.notes || '']
+                  );
+                }
+
+                // 3. Wipe and rewrite inventory
+                await db.runAsync('DELETE FROM inventory');
+                for (const i of merged.inventory) {
+                  await db.runAsync(
+                    'INSERT OR REPLACE INTO inventory (id, type, quantityKg, notes, date, txId) VALUES (?, ?, ?, ?, ?, ?)',
+                    [i.id, i.type, i.quantityKg || 0, i.notes || '', i.date, i.txId || '']
+                  );
+                }
+
+                // 4. Save settings to SQLite
+                if (data.businessName) await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_biz_name', data.businessName]);
+                if (data.upiId) await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_upi_id', data.upiId]);
+                await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_def_rate', (data.defaultRate || defaultRate).toString()]);
+                if (data.weightPresets) await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_weight_presets', JSON.stringify(data.weightPresets)]);
+                if (data.ratePresets) await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_rate_presets', JSON.stringify(data.ratePresets)]);
+                await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_sync_code', trimmedCode]);
+                await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['ghee_bucket_id', bucketId]);
+              });
+              console.log("Cloud restore SQLite transaction succeeded.");
+            } catch (dbErr) {
+              console.error("SQLite write failed during cloud restore:", dbErr);
+            }
+          });
+        }
+
         triggerNotification('Database successfully merged from cloud!');
       } else {
         triggerNotification('Invalid cloud backup payload structure.', 'error');
@@ -1817,7 +2105,7 @@ export default function AppCore() {
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.bgSand} />
 
       {/* 1. Premium Floating Header */}
-      {activeTab !== 'client-profile' && (
+      {activeTab !== 'client-profile' && (activeTab !== 'settings' || activeSettingsSection === null) && (
         <Header
           activeTab={activeTab as any}
           businessName={businessName}
@@ -1962,6 +2250,11 @@ export default function AppCore() {
               backupToCloud={backupToCloud}
               restoreFromCloud={restoreFromCloud}
               isSyncing={isSyncing}
+              activeSection={activeSettingsSection}
+              setActiveSection={setActiveSettingsSection}
+              lastBackupTime={lastBackupTime}
+              backupRecords={backupRecords}
+              backupSizeFormatted={backupSizeFormatted}
             />
           )}
         </TabContainer>
@@ -1974,7 +2267,7 @@ export default function AppCore() {
         </View>
       )}
 
-      {/* 4. Bottom Tab Bar (Google M3 Compact + Premium Floating Record Button) */}
+      {/* 4. Bottom Tab Bar */}
       {activeTab !== 'client-profile' && (
         <View style={styles.navBar}>
           <TouchableOpacity
@@ -2005,7 +2298,7 @@ export default function AppCore() {
             <Text style={[styles.navText, activeTab === 'analytics' && styles.navTextActive]}>Analytics</Text>
           </TouchableOpacity>
 
-          {/* Restore Premium Floating Record button */}
+          {/* Premium Floating Record button */}
           <TouchableOpacity
             onPress={() => { setActiveTab('quick-add'); setRecordMethod('manual'); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}
             style={styles.navItemRecord}
@@ -2450,7 +2743,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   navBar: {
-    height: 64, // Sleek, compact height restored!
+    height: 64,
     borderTopWidth: 1,
     borderTopColor: '#ede8df',
     backgroundColor: COLORS.bgSand,
@@ -2516,10 +2809,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'transparent',
     marginBottom: 2,
-    overflow: 'hidden', // Ensures the background color clips perfectly to the pill shape on all platforms
+    overflow: 'hidden',
   },
   indicatorPillActive: {
-    backgroundColor: '#f9e8e2', // soft coral active capsule tint
+    backgroundColor: '#f9e8e2',
   },
   navText: {
     fontFamily: FONTS.sans,
@@ -2532,6 +2825,7 @@ const styles = StyleSheet.create({
     color: COLORS.coral,
     fontWeight: '600',
   },
+
   toastContainer: {
     position: 'absolute',
     bottom: 80,

@@ -54,6 +54,11 @@ interface SettingsTabProps {
   backupToCloud: (code: string) => void;
   restoreFromCloud: (code: string) => void;
   isSyncing: boolean;
+  activeSection: 'upi' | 'backup' | 'gemini' | 'security' | 'presets' | 'about' | 'import' | null;
+  setActiveSection: (section: 'upi' | 'backup' | 'gemini' | 'security' | 'presets' | 'about' | 'import' | null) => void;
+  lastBackupTime: string;
+  backupRecords: number;
+  backupSizeFormatted: string;
 }
 
 export default function SettingsTab({
@@ -82,10 +87,13 @@ export default function SettingsTab({
   backupToCloud,
   restoreFromCloud,
   isSyncing,
+  activeSection,
+  setActiveSection,
+  lastBackupTime,
+  backupRecords,
+  backupSizeFormatted,
 }: SettingsTabProps) {
 
-  // Inline page-based navigation
-  const [activeSection, setActiveSection] = useState<'upi' | 'backup' | 'gemini' | 'security' | 'presets' | 'about' | 'import' | null>(null);
   const [importText, setImportText] = useState('');
   const [autoBackupEnabled, setAutoBackupEnabled] = useState(true);
 
@@ -185,19 +193,19 @@ export default function SettingsTab({
               <CloudLightning size={24} color="#255246" />
             </View>
             <Text style={styles.lastBackupLabel}>Last Backup</Text>
-            <Text style={styles.lastBackupTime}>15 May 2024 • 10:30 AM</Text>
-            <Text style={styles.backupDestination}>Google Drive</Text>
+            <Text style={styles.lastBackupTime}>{lastBackupTime}</Text>
+            <Text style={styles.backupDestination}>KVdb Cloud</Text>
 
             {/* Sizes Stats Grid - borderless */}
             <View style={styles.backupStatsGrid}>
               <View style={styles.backupStatCell}>
                 <Text style={styles.backupStatLabel}>Backup Size</Text>
-                <Text style={styles.backupStatVal}>12.4 MB</Text>
+                <Text style={styles.backupStatVal}>{backupSizeFormatted}</Text>
               </View>
               <View style={styles.backupStatDivider} />
               <View style={styles.backupStatCell}>
                 <Text style={styles.backupStatLabel}>Records</Text>
-                <Text style={styles.backupStatVal}>1,248</Text>
+                <Text style={styles.backupStatVal}>{backupRecords.toLocaleString('en-IN')}</Text>
               </View>
             </View>
           </View>
@@ -291,7 +299,7 @@ export default function SettingsTab({
               <Text style={styles.label}>Private Sync Code</Text>
               <View style={styles.syncInputContainer}>
                 <TextInput
-                  secureTextEntry={true}
+                  secureTextEntry={false}
                   value={syncCode}
                   onChangeText={setSyncCode}
                   placeholder="Enter private passcode..."
@@ -602,7 +610,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.bgSand, // Elegant sand background
   },
   subPageHeader: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingTop: 16,
     paddingBottom: 12,
     backgroundColor: COLORS.bgSand,
@@ -619,11 +627,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scrollContent: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingBottom: 40,
   },
   scrollContentMain: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingTop: 24, // Direct starting padding without upper navbar
     paddingBottom: 40,
   },

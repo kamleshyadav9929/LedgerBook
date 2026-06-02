@@ -220,14 +220,7 @@ export default function CustomerProfileSheet({
                 )}
               </View>
 
-              <View style={styles.tagBadgeRow}>
-                <View style={styles.tagBadge}>
-                  <Text style={styles.tagBadgeText}>↑ Since May 2023</Text>
-                </View>
-                <View style={[styles.tagBadge, styles.tagBadgeGreen]}>
-                  <Text style={[styles.tagBadgeText, styles.tagBadgeTextGreen]}>✓ Trusted</Text>
-                </View>
-              </View>
+
             </View>
           </View>
 
@@ -252,51 +245,55 @@ export default function CustomerProfileSheet({
 
         {/* Quick Actions section */}
         <Text style={styles.sectionLabel}>Quick Actions</Text>
-        <View style={styles.quickActionsRow}>
-          <TouchableOpacity 
-            onPress={() => onOpenQuickAdd(profile.id, 'sale')} 
-            style={styles.quickActionCard}
-            activeOpacity={0.8}
-          >
-            <View style={styles.actionIconCircle}>
-              <ShoppingCart size={16} color={COLORS.textDark} />
-            </View>
-            <Text style={styles.quickActionText}>Record Sale</Text>
-          </TouchableOpacity>
+        <View style={styles.quickActionsGrid}>
+          <View style={styles.quickActionsRow}>
+            <TouchableOpacity 
+              onPress={() => onOpenQuickAdd(profile.id, 'sale')} 
+              style={styles.quickActionCard}
+              activeOpacity={0.8}
+            >
+              <View style={styles.actionIconCircle}>
+                <ShoppingCart size={16} color={COLORS.textDark} />
+              </View>
+              <Text style={styles.quickActionText}>Record Sale</Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity 
-            onPress={() => onOpenQuickAdd(profile.id, 'payment', profile.pendingAmount)} 
-            style={styles.quickActionCard}
-            activeOpacity={0.8}
-          >
-            <View style={styles.actionIconCircle}>
-              <Wallet size={16} color={COLORS.textDark} />
-            </View>
-            <Text style={styles.quickActionText}>Record Payment</Text>
-          </TouchableOpacity>
+            <TouchableOpacity 
+              onPress={() => onOpenQuickAdd(profile.id, 'payment', profile.pendingAmount)} 
+              style={styles.quickActionCard}
+              activeOpacity={0.8}
+            >
+              <View style={styles.actionIconCircle}>
+                <Wallet size={16} color={COLORS.textDark} />
+              </View>
+              <Text style={styles.quickActionText}>Record Payment</Text>
+            </TouchableOpacity>
+          </View>
 
-          <TouchableOpacity 
-            onPress={onOpenReminderCenter} 
-            disabled={profile.pendingAmount <= 0}
-            style={[styles.quickActionCard, profile.pendingAmount <= 0 && styles.actionButtonDisabled]}
-            activeOpacity={0.8}
-          >
-            <View style={styles.actionIconCircle}>
-              <Bell size={16} color={COLORS.textDark} />
-            </View>
-            <Text style={styles.quickActionText}>Send Reminder</Text>
-          </TouchableOpacity>
+          <View style={styles.quickActionsRow}>
+            <TouchableOpacity 
+              onPress={onOpenReminderCenter} 
+              disabled={profile.pendingAmount <= 0}
+              style={[styles.quickActionCard, profile.pendingAmount <= 0 && styles.actionButtonDisabled]}
+              activeOpacity={0.8}
+            >
+              <View style={styles.actionIconCircle}>
+                <Bell size={16} color={COLORS.textDark} />
+              </View>
+              <Text style={styles.quickActionText}>Send Reminder</Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity 
-            onPress={onOpenReminderCenter} 
-            style={styles.quickActionCard}
-            activeOpacity={0.8}
-          >
-            <View style={styles.actionIconCircle}>
-              <FileText size={16} color={COLORS.textDark} />
-            </View>
-            <Text style={styles.quickActionText}>Statement</Text>
-          </TouchableOpacity>
+            <TouchableOpacity 
+              onPress={onOpenReminderCenter} 
+              style={styles.quickActionCard}
+              activeOpacity={0.8}
+            >
+              <View style={styles.actionIconCircle}>
+                <FileText size={16} color={COLORS.textDark} />
+              </View>
+              <Text style={styles.quickActionText}>Statement</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Tab Selector pills for Overview, Transactions, Payments, Notes */}
@@ -329,29 +326,6 @@ export default function CustomerProfileSheet({
         {/* Tab Content */}
         {activeSubTab === 'overview' && (
           <View style={styles.tabContentArea}>
-            {/* Ledger Summary Card */}
-            <View style={styles.ledgerSummaryCard}>
-              <Text style={styles.ledgerCardTitle}>Ledger Summary</Text>
-              <Text style={styles.ledgerCardDate}>As on {formatVisualDate(new Date().toISOString().split('T')[0])}</Text>
-              
-              <View style={styles.ledgerDetailsGrid}>
-                <View style={styles.ledgerDetailItem}>
-                  <Text style={styles.ledgerDetailLabel}>Total Ghee Taken</Text>
-                  <Text style={styles.ledgerDetailVal}>{profile.totalGheeKg} kg</Text>
-                </View>
-                <View style={styles.verticalDivider} />
-                <View style={styles.ledgerDetailItem}>
-                  <Text style={styles.ledgerDetailLabel}>Total Paid ↑</Text>
-                  <Text style={[styles.ledgerDetailVal, { color: COLORS.green }]}>₹{totalPaymentsVal.toLocaleString('en-IN')}</Text>
-                </View>
-                <View style={styles.verticalDivider} />
-                <View style={styles.ledgerDetailItem}>
-                  <Text style={styles.ledgerDetailLabel}>Total Dues</Text>
-                  <Text style={[styles.ledgerDetailVal, { color: COLORS.red }]}>₹{profile.pendingAmount.toLocaleString('en-IN')}</Text>
-                </View>
-              </View>
-            </View>
-
             {/* Recent Transactions Section */}
             <View style={styles.recentLogsSection}>
               <View style={styles.sectionHeaderRow}>
@@ -594,7 +568,7 @@ const styles = StyleSheet.create({
   },
   scrollBody: {
     flex: 1,
-    paddingHorizontal: 16,
+    paddingHorizontal: 4,
   },
   scrollContent: {
     paddingBottom: 40,
@@ -737,25 +711,27 @@ const styles = StyleSheet.create({
     color: COLORS.textDark,
     marginBottom: 8,
   },
+  quickActionsGrid: {
+    marginBottom: 18,
+    gap: 8,
+  },
   quickActionsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 18,
+    gap: 8,
   },
   quickActionCard: {
     flex: 1,
     backgroundColor: COLORS.white,
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 12,
-    paddingVertical: 12,
+    borderRadius: 14,
+    paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    marginHorizontal: 3,
     elevation: 1,
     shadowColor: COLORS.black,
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.02,
+    shadowOpacity: 0.03,
     shadowRadius: 2,
   },
   actionIconCircle: {
